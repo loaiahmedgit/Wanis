@@ -1,138 +1,92 @@
 /**
- * Render -> critique -> refine pipeline. For each question: ask the live
- * /api/explain for a plan, and for every drawing step that is a semantic
- * scene graph, run the loop:
- *   validate -> render (the REAL UI, at desktop + mobile) -> vision-critique
- *   -> if not approved, refine the GRAPH ONLY -> re-validate -> re-render ->
- *   re-critique, up to 2 refinement attempts.
+ * Render -> (visual + semantic critique) -> refine pipeline. For each question:
+ * ask the live /api/explain for a plan, and for every scene-graph drawing step:
+ *   validate -> render (real UI, desktop+mobile) -> visual critic (images) +
+ *   semantic critic (question + JSON) -> if not BOTH approved, refine the GRAPH
+ *   ONLY -> re-validate -> re-render -> re-critique, up to 2 refinement attempts.
  *
- * Approval is derived in code (correct && !clipping && !collisions &&
- * readability >= 4), never from the model's self-report. Every attempt's
- * graph + critique + renders are tracked together so they can't be
- * mismatched, and the run ends in an explicit terminal state:
- *   approved | exhausted_needs_revision | unreviewed_after_failure | invalid
- * Only `approved` examples are marked training-ready.
+ * Two independent critics (see src/critique/critic.ts): the visual one judges
+ * layout from pixels, the semantic one judges meaning from the JSON (so it
+ * never guesses arrow direction). Approval is derived in code and requires
+ * BOTH. Terminal states:
+ *   approved | exhausted_needs_revision | critic_disagreement |
+ *   unreviewed_after_failure | invalid
+ * Only `approved` is trainingReady. A 429 is always unreviewed_after_failure,
+ * never a negative quality result.
  */
-import { readFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { chromium, type Browser } from "playwright";
-import { parseSceneGraph, type SceneGraph } from "../src/visual/sceneGraph";
-import { compileSceneGraph } from "../src/visual/compiler";
+import type { Browser } from "playwright";
+import type { SceneGraph } from "../src/visual/sceneGraph";
 import type { StrokeProgram } from "../src/visual/strokeProgram";
 import {
-  CRITIQUE_SCHEMA,
-  critiqueInstruction,
+  VISUAL_SCHEMA,
+  SEMANTIC_SCHEMA,
+  visualCritiqueInstruction,
+  semanticCritiqueInstruction,
+  parseVisualCritique,
+  parseSemanticCritique,
+  isVisualApproved,
+  isSemanticApproved,
+  combinedVerdict,
   refineInstruction,
-  parseCritique,
-  isApproved,
-  type Critique,
+  type VisualCritique,
+  type SemanticCritique,
   type TerminalState,
 } from "../src/critique/critic";
+import {
+  APP,
+  PLANNER_MODEL,
+  VISUAL_CRITIC_MODEL,
+  SEMANTIC_CRITIC_MODEL,
+  getKey,
+  callGemini,
+  renderReal,
+  validate,
+  isQuota,
+  emptyCost,
+  addCost,
+  chromium,
+  type Cost,
+} from "./pipelineLib";
 
-const GEMINI_MODEL = "gemini-flash-lite-latest";
-const APP = "http://localhost:5173";
 const OUT_DIR = join(process.cwd(), "training-data");
 const MAX_ATTEMPTS = 2;
 
-const VIEWPORTS = [
-  { name: "desktop", width: 1100, height: 900 },
-  { name: "mobile", width: 390, height: 844 },
-];
-
-const IN_COST = 0.075 / 1e6;
-const OUT_COST = 0.3 / 1e6;
-
-function getKey(): string {
-  const env = readFileSync(join(process.cwd(), ".env"), "utf8");
-  const m = env.match(/^GEMINI_API_KEY=(.+)$/m);
-  if (!m) throw new Error("GEMINI_API_KEY not found in .env");
-  return m[1].trim();
-}
-
-interface Cost {
-  latencyMs: number;
-  inTokens: number;
-  outTokens: number;
-}
-
-async function callGemini(key: string, parts: unknown[], schema: unknown | null, systemText: string) {
-  const start = Date.now();
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", "X-goog-api-key": key },
-    body: JSON.stringify({
-      systemInstruction: { parts: [{ text: systemText }] },
-      contents: [{ parts }],
-      generationConfig: schema
-        ? { responseMimeType: "application/json", responseSchema: schema }
-        : { responseMimeType: "application/json" },
-    }),
-  });
-  if (!res.ok) throw new Error(`Gemini ${res.status}: ${(await res.text()).slice(0, 160)}`);
-  const json = (await res.json()) as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-    usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number };
-  };
-  const cost: Cost = {
-    latencyMs: Date.now() - start,
-    inTokens: json.usageMetadata?.promptTokenCount ?? 0,
-    outTokens: json.usageMetadata?.candidatesTokenCount ?? 0,
-  };
-  return { text: json.candidates?.[0]?.content?.parts?.[0]?.text ?? "", cost };
-}
-
-function encodeGraph(graph: SceneGraph): string {
-  return Buffer.from(JSON.stringify(graph)).toString("base64");
-}
-
-/** Render the real UI for a graph at every viewport; returns PNGs + render latency. */
-async function renderReal(browser: Browser, graph: SceneGraph): Promise<{ renders: Record<string, Buffer>; latencyMs: number }> {
-  const url = `${APP}/?rendergraph=${encodeURIComponent(encodeGraph(graph))}`;
-  const out: Record<string, Buffer> = {};
-  const start = Date.now();
-  for (const vp of VIEWPORTS) {
-    const page = await browser.newPage({ viewport: { width: vp.width, height: vp.height } });
-    try {
-      await page.goto(url, { waitUntil: "networkidle", timeout: 15000 });
-      const el = await page.waitForSelector('[data-render-target="1"]', { timeout: 8000 });
-      await page.evaluate(() => (document as Document).fonts.ready); // wait for real fonts, not a fixed guess
-      out[vp.name] = await el.screenshot({ type: "png" });
-    } finally {
-      await page.close();
-    }
-  }
-  return { renders: out, latencyMs: Date.now() - start };
-}
-
-function validate(raw: unknown): { graph: SceneGraph; program: StrokeProgram } | null {
-  const graph = parseSceneGraph(raw);
-  if (!graph) return null;
-  const program = compileSceneGraph(graph);
-  if (!program) return null;
-  return { graph, program };
-}
-
-async function critique(key: string, renders: Record<string, Buffer>, question: string, meaning: string) {
-  // Send every viewport image so the critic can catch responsive clipping.
-  const parts: unknown[] = [{ text: critiqueInstruction(question, meaning) }];
+async function visualCritique(key: string, renders: Record<string, Buffer>) {
+  const parts: unknown[] = [{ text: visualCritiqueInstruction() }];
   for (const [name, buf] of Object.entries(renders)) {
     parts.push({ text: `[${name} viewport]` });
     parts.push({ inline_data: { mime_type: "image/png", data: buf.toString("base64") } });
   }
-  const r = await callGemini(key, parts, CRITIQUE_SCHEMA, "You are a strict visual-explanation reviewer.");
-  const c = parseCritique(JSON.parse(r.text));
-  if (!c) throw new Error("critique response not an object");
+  const r = await callGemini(VISUAL_CRITIC_MODEL, key, parts, VISUAL_SCHEMA, "You are a strict visual layout reviewer.");
+  const c = parseVisualCritique(JSON.parse(r.text));
+  if (!c) throw new Error("visual critique not an object");
+  return { critique: c, cost: r.cost };
+}
+
+async function semanticCritique(key: string, question: string, graph: SceneGraph) {
+  const r = await callGemini(
+    SEMANTIC_CRITIC_MODEL,
+    key,
+    [{ text: semanticCritiqueInstruction(question, JSON.stringify(graph, null, 1)) }],
+    SEMANTIC_SCHEMA,
+    "You are a strict scientific/pedagogical reviewer.",
+  );
+  const c = parseSemanticCritique(JSON.parse(r.text));
+  if (!c) throw new Error("semantic critique not an object");
   return { critique: c, cost: r.cost };
 }
 
 async function refine(key: string, question: string, graph: SceneGraph, revisions: string[]) {
   const r = await callGemini(
+    PLANNER_MODEL,
     key,
     [
       {
         text:
           `Student question: ${question}\n\nCurrent scene graph:\n${JSON.stringify(graph)}\n\n` +
-          `Reviewer's requested fixes:\n- ${revisions.join("\n- ")}`,
+          `Reviewers' requested fixes:\n- ${revisions.join("\n- ")}`,
       },
     ],
     null,
@@ -147,24 +101,36 @@ interface AttemptRecord {
   attempt: number;
   graph: SceneGraph;
   renders: string[];
-  critique: Critique | null;
-  approved: boolean;
+  visual: VisualCritique | null;
+  semantic: SemanticCritique | null;
+  visualApproved: boolean;
+  semanticApproved: boolean;
+  verdict: "approved" | "rejected" | "disagreement" | null;
   error?: string;
 }
 
-/** Deterministic quality rank of a critiqued attempt: correctness first, then
- *  clipping/collisions, then readability. Higher is better. */
+/** Deterministic quality rank of a fully-reviewed attempt. Higher is better. */
 function rankAttempt(a: AttemptRecord): number {
-  const c = a.critique;
-  if (!c) return -1;
-  return (c.correct ? 1000 : 0) + (!c.clipping ? 200 : 0) + (!c.collisions ? 200 : 0) + c.readability;
+  if (!a.visual || !a.semantic) return -1;
+  const v = a.visual;
+  const s = a.semantic;
+  return (
+    (a.verdict === "approved" ? 10000 : 0) +
+    (s.correct ? 1000 : 0) +
+    (s.complete ? 500 : 0) +
+    (s.transitionOrderCorrect ? 500 : 0) +
+    (!v.clipping ? 200 : 0) +
+    (!v.collisions ? 200 : 0) +
+    s.educationalValue * 10 +
+    v.legibility +
+    v.composition
+  );
 }
 
 async function processGraph(
   browser: Browser,
   key: string,
   question: string,
-  meaning: string,
   rawGraph: unknown,
   dir: string,
   planLatencyMs: number,
@@ -172,20 +138,15 @@ async function processGraph(
   mkdirSync(dir, { recursive: true });
   const wallStart = Date.now();
   const attempts: AttemptRecord[] = [];
-  let apiCost: Cost = { latencyMs: 0, inTokens: 0, outTokens: 0 };
+  let apiCost: Cost = emptyCost();
   let renderLatencyMs = 0;
-  const addCost = (c: Cost) => {
-    apiCost = {
-      latencyMs: apiCost.latencyMs + c.latencyMs,
-      inTokens: apiCost.inTokens + c.inTokens,
-      outTokens: apiCost.outTokens + c.outTokens,
-    };
-  };
 
   const first = validate(rawGraph);
   if (!first) {
-    const meta = { question, meaning, terminalState: "invalid" as TerminalState, trainingReady: false, rawGraph };
-    writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
+    writeFileSync(
+      join(dir, "meta.json"),
+      JSON.stringify({ question, terminalState: "invalid" as TerminalState, trainingReady: false, rawGraph }, null, 2),
+    );
     return { terminalState: "invalid" as TerminalState };
   }
 
@@ -193,12 +154,19 @@ async function processGraph(
   let terminalState: TerminalState = "unreviewed_after_failure";
 
   for (let attempt = 0; attempt <= MAX_ATTEMPTS; attempt++) {
-    const rec: AttemptRecord = { attempt, graph: current.graph, renders: [], critique: null, approved: false };
-    // Persist THIS attempt's graph alongside its renders + critique — the
-    // intermediate graphs are the most valuable training pairs.
+    const rec: AttemptRecord = {
+      attempt,
+      graph: current.graph,
+      renders: [],
+      visual: null,
+      semantic: null,
+      visualApproved: false,
+      semanticApproved: false,
+      verdict: null,
+    };
     writeFileSync(join(dir, `graph-${attempt}.json`), JSON.stringify(current.graph, null, 2));
 
-    // Render the real UI at each viewport.
+    // Render real UI at each viewport.
     let renders: Record<string, Buffer>;
     try {
       const r = await renderReal(browser, current.graph);
@@ -216,64 +184,67 @@ async function processGraph(
       break;
     }
 
-    // Critique (paired with THIS attempt's graph + renders).
-    let crit: Critique;
+    // Both critics. A 429 in EITHER is a failure (unreviewed), not a negative.
     try {
-      const c = await critique(key, renders, question, meaning);
-      crit = c.critique;
-      addCost(c.cost);
-      rec.critique = crit;
-      rec.approved = isApproved(crit);
-      writeFileSync(join(dir, `critique-${attempt}.json`), JSON.stringify(crit, null, 2));
+      const vis = await visualCritique(key, renders);
+      apiCost = addCost(apiCost, vis.cost);
+      rec.visual = vis.critique;
+      rec.visualApproved = isVisualApproved(vis.critique);
+      writeFileSync(join(dir, `visual-${attempt}.json`), JSON.stringify(vis.critique, null, 2));
+
+      const sem = await semanticCritique(key, question, current.graph);
+      apiCost = addCost(apiCost, sem.cost);
+      rec.semantic = sem.critique;
+      rec.semanticApproved = isSemanticApproved(sem.critique);
+      writeFileSync(join(dir, `semantic-${attempt}.json`), JSON.stringify(sem.critique, null, 2));
+
+      rec.verdict = combinedVerdict(vis.critique, sem.critique);
     } catch (e) {
-      rec.error = `critique failed: ${String(e)}`;
+      rec.error = `${isQuota(e) ? "quota(429)" : "critique failed"}: ${String(e).slice(0, 80)}`;
       attempts.push(rec);
       terminalState = "unreviewed_after_failure";
       break;
     }
     attempts.push(rec);
 
-    if (rec.approved) {
+    if (rec.verdict === "approved") {
       terminalState = "approved";
       break;
     }
     if (attempt === MAX_ATTEMPTS) {
-      terminalState = "exhausted_needs_revision";
+      terminalState = rec.verdict === "disagreement" ? "critic_disagreement" : "exhausted_needs_revision";
       break;
     }
 
-    // Refine the graph only.
+    // Refine using both critics' revision requests.
+    const revisions = [...(rec.visual?.revisions ?? []), ...(rec.semantic?.revisions ?? [])];
     try {
-      const rf = await refine(key, question, current.graph, crit.revisions);
-      addCost(rf.cost);
+      const rf = await refine(key, question, current.graph, revisions);
+      apiCost = addCost(apiCost, rf.cost);
       const revalidated = validate(rf.raw);
       if (!revalidated) {
-        terminalState = "exhausted_needs_revision"; // last good graph stands; couldn't improve
+        terminalState = rec.verdict === "disagreement" ? "critic_disagreement" : "exhausted_needs_revision";
         break;
       }
       current = revalidated;
-    } catch {
+    } catch (e) {
       terminalState = "unreviewed_after_failure";
+      void e;
       break;
     }
   }
 
-  // Two distinct picks, both preserved:
-  // - lastAttempt: the final graph the loop ended on (per-spec "keep last").
-  // - bestAttempt: the highest-ranked REVIEWED attempt — because refinement
-  //   can degrade quality, "last" is not always "best" for training/serving.
-  const reviewed = attempts.filter((a) => a.critique);
+  const reviewed = attempts.filter((a) => a.verdict);
   const lastAttempt = attempts[attempts.length - 1] ?? null;
   const bestAttempt = reviewed.length
     ? reviewed.reduce((best, a) => (rankAttempt(a) > rankAttempt(best) ? a : best))
     : null;
 
   const asRef = (a: AttemptRecord | null) =>
-    a ? { attempt: a.attempt, graph: a.graph, critique: a.critique, approved: a.approved } : null;
+    a ? { attempt: a.attempt, graph: a.graph, visual: a.visual, semantic: a.semantic, verdict: a.verdict } : null;
 
   const meta = {
     question,
-    meaning,
     terminalState,
     trainingReady: terminalState === "approved",
     lastAttempt: asRef(lastAttempt),
@@ -282,22 +253,20 @@ async function processGraph(
       attempt: a.attempt,
       graph: a.graph,
       renders: a.renders,
-      approved: a.approved,
-      critique: a.critique,
+      verdict: a.verdict,
+      visualApproved: a.visualApproved,
+      semanticApproved: a.semanticApproved,
+      visual: a.visual,
+      semantic: a.semantic,
       error: a.error,
     })),
     tokens: { in: apiCost.inTokens, out: apiCost.outTokens },
-    estCostUsd: Number((apiCost.inTokens * IN_COST + apiCost.outTokens * OUT_COST).toFixed(6)),
-    latencyMs: {
-      plan: planLatencyMs,
-      criticApi: apiCost.latencyMs,
-      render: renderLatencyMs,
-      wallClock: Date.now() - wallStart,
-    },
+    estCostUsd: Number(apiCost.usd.toFixed(6)),
+    latencyMs: { plan: planLatencyMs, criticApi: apiCost.latencyMs, render: renderLatencyMs, wallClock: Date.now() - wallStart },
   };
   writeFileSync(join(dir, "original.json"), JSON.stringify(first.graph, null, 2));
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
-  return { terminalState, critique: (bestAttempt ?? lastAttempt)?.critique ?? null };
+  return { terminalState, best: bestAttempt };
 }
 
 async function run() {
@@ -319,23 +288,16 @@ async function run() {
         const res = await fetch(`${APP}/api/explain`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ prompt: q, model: GEMINI_MODEL }),
+          body: JSON.stringify({ prompt: q, model: PLANNER_MODEL }),
         });
         planLatencyMs = Date.now() - planStart;
-        // A non-ok planner response (e.g. a Gemini 429 surfaced as 502) is a
-        // planner failure — record it distinctly, never count it as a routing
-        // result ("no scene-graph") which would poison the dataset's signal.
         if (!res.ok) {
           const body = await res.text().catch(() => "");
           const dir = join(OUT_DIR, `${slug(q)}-planner-failed`);
           mkdirSync(dir, { recursive: true });
           writeFileSync(
             join(dir, "meta.json"),
-            JSON.stringify(
-              { question: q, terminalState: "planner_failed", httpStatus: res.status, body: body.slice(0, 400), planLatencyMs },
-              null,
-              2,
-            ),
+            JSON.stringify({ question: q, terminalState: "planner_failed", httpStatus: res.status, body: body.slice(0, 400) }, null, 2),
           );
           console.log(`  planner_failed: HTTP ${res.status}`);
           continue;
@@ -358,10 +320,11 @@ async function run() {
         if (!content.sceneGraph) continue;
         found++;
         const dir = join(OUT_DIR, `${slug(q)}-${idx++}`);
-        const r = await processGraph(browser, key, q, `a diagram for: ${q}`, content.sceneGraph, dir, planLatencyMs);
+        const r = await processGraph(browser, key, q, content.sceneGraph, dir, planLatencyMs);
+        const b = r.best;
         console.log(
           `  [${dir.split(/[\\/]/).pop()}] ${r.terminalState}` +
-            (r.critique ? ` (readability=${r.critique.readability})` : ""),
+            (b ? ` (vis=${b.visualApproved ? "ok" : "x"} sem=${b.semanticApproved ? "ok" : "x"})` : ""),
         );
       }
       if (!found) console.log("  (no scene-graph drawing steps)");
