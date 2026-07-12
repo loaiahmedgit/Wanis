@@ -141,3 +141,63 @@
 .toolbar-buttons button:active {
   transform: translateY(0);
 }
+
+.mode-toggle {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: #a9b8c9;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, color 0.15s;
+}
+.mode-toggle:hover {
+  border-color: rgba(79, 214, 255, 0.4);
+  color: #e8edf2;
+}
+
+.mock-foreground {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 0 48px;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    rgba(5, 7, 10, 0.55) 0%,
+    rgba(5, 7, 10, 0.15) 55%,
+    rgba(5, 7, 10, 0.55) 100%
+  );
+}
+.mock-eyebrow {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: #4fd6ff;
+  margin-bottom: 14px;
+}
+.mock-foreground h1 {
+  font-size: clamp(28px, 4vw, 44px);
+  font-weight: 700;
+  line-height: 1.15;
+  margin: 0 0 16px;
+  color: #f2f6fa;
+  letter-spacing: -0.01em;
+}
+.mock-foreground p {
+  font-size: 15px;
+  line-height: 1.6;
+  color: #93a3b5;
+  margin: 0;
+  max-width: 460px;
+}

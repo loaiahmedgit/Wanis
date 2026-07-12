@@ -8,6 +8,8 @@ interface ToolbarProps {
 export function Toolbar({ pinCount }: ToolbarProps) {
   const requestCameraReset = useFieldStore((s) => s.requestCameraReset);
   const requestReplay = useFieldStore((s) => s.requestReplay);
+  const backgroundMode = useFieldStore((s) => s.backgroundMode);
+  const toggleBackgroundMode = useFieldStore((s) => s.toggleBackgroundMode);
   const fps = useFps();
 
   return (
@@ -24,6 +26,9 @@ export function Toolbar({ pinCount }: ToolbarProps) {
         <button onClick={requestReplay}>Replay</button>
         <button onClick={requestCameraReset}>Reset camera</button>
       </div>
+      <button className="mode-toggle" onClick={toggleBackgroundMode}>
+        {backgroundMode ? "Show full field view" : "Show as background"}
+      </button>
     </div>
   );
 }
