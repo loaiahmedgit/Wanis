@@ -85,22 +85,23 @@ function encodeGraph(graph: SceneGraph): string {
   return Buffer.from(JSON.stringify(graph)).toString("base64");
 }
 
-/** Render the real UI for a graph at every viewport; returns PNG buffers by viewport name. */
-async function renderReal(browser: Browser, graph: SceneGraph): Promise<Record<string, Buffer>> {
+/** Render the real UI for a graph at every viewport; returns PNGs + render latency. */
+async function renderReal(browser: Browser, graph: SceneGraph): Promise<{ renders: Record<string, Buffer>; latencyMs: number }> {
   const url = `${APP}/?rendergraph=${encodeURIComponent(encodeGraph(graph))}`;
   const out: Record<string, Buffer> = {};
+  const start = Date.now();
   for (const vp of VIEWPORTS) {
     const page = await browser.newPage({ viewport: { width: vp.width, height: vp.height } });
     try {
       await page.goto(url, { waitUntil: "networkidle", timeout: 15000 });
       const el = await page.waitForSelector('[data-render-target="1"]', { timeout: 8000 });
-      await page.waitForTimeout(500); // let fonts settle
+      await page.evaluate(() => (document as Document).fonts.ready); // wait for real fonts, not a fixed guess
       out[vp.name] = await el.screenshot({ type: "png" });
     } finally {
       await page.close();
     }
   }
-  return out;
+  return { renders: out, latencyMs: Date.now() - start };
 }
 
 function validate(raw: unknown): { graph: SceneGraph; program: StrokeProgram } | null {
@@ -151,6 +152,14 @@ interface AttemptRecord {
   error?: string;
 }
 
+/** Deterministic quality rank of a critiqued attempt: correctness first, then
+ *  clipping/collisions, then readability. Higher is better. */
+function rankAttempt(a: AttemptRecord): number {
+  const c = a.critique;
+  if (!c) return -1;
+  return (c.correct ? 1000 : 0) + (!c.clipping ? 200 : 0) + (!c.collisions ? 200 : 0) + c.readability;
+}
+
 async function processGraph(
   browser: Browser,
   key: string,
@@ -158,15 +167,18 @@ async function processGraph(
   meaning: string,
   rawGraph: unknown,
   dir: string,
+  planLatencyMs: number,
 ) {
   mkdirSync(dir, { recursive: true });
+  const wallStart = Date.now();
   const attempts: AttemptRecord[] = [];
-  let totalCost: Cost = { latencyMs: 0, inTokens: 0, outTokens: 0 };
+  let apiCost: Cost = { latencyMs: 0, inTokens: 0, outTokens: 0 };
+  let renderLatencyMs = 0;
   const addCost = (c: Cost) => {
-    totalCost = {
-      latencyMs: totalCost.latencyMs + c.latencyMs,
-      inTokens: totalCost.inTokens + c.inTokens,
-      outTokens: totalCost.outTokens + c.outTokens,
+    apiCost = {
+      latencyMs: apiCost.latencyMs + c.latencyMs,
+      inTokens: apiCost.inTokens + c.inTokens,
+      outTokens: apiCost.outTokens + c.outTokens,
     };
   };
 
@@ -182,11 +194,16 @@ async function processGraph(
 
   for (let attempt = 0; attempt <= MAX_ATTEMPTS; attempt++) {
     const rec: AttemptRecord = { attempt, graph: current.graph, renders: [], critique: null, approved: false };
+    // Persist THIS attempt's graph alongside its renders + critique — the
+    // intermediate graphs are the most valuable training pairs.
+    writeFileSync(join(dir, `graph-${attempt}.json`), JSON.stringify(current.graph, null, 2));
 
     // Render the real UI at each viewport.
     let renders: Record<string, Buffer>;
     try {
-      renders = await renderReal(browser, current.graph);
+      const r = await renderReal(browser, current.graph);
+      renders = r.renders;
+      renderLatencyMs += r.latencyMs;
       for (const [name, buf] of Object.entries(renders)) {
         const f = `render-${attempt}-${name}.png`;
         writeFileSync(join(dir, f), buf);
@@ -241,34 +258,46 @@ async function processGraph(
     }
   }
 
-  // The approved (or last) attempt is the source of truth — graph and critique
-  // always come from the SAME record, so they can never be mismatched.
-  const finalRec =
-    attempts.find((a) => a.approved) ??
-    [...attempts].reverse().find((a) => a.critique) ??
-    attempts[attempts.length - 1];
+  // Two distinct picks, both preserved:
+  // - lastAttempt: the final graph the loop ended on (per-spec "keep last").
+  // - bestAttempt: the highest-ranked REVIEWED attempt — because refinement
+  //   can degrade quality, "last" is not always "best" for training/serving.
+  const reviewed = attempts.filter((a) => a.critique);
+  const lastAttempt = attempts[attempts.length - 1] ?? null;
+  const bestAttempt = reviewed.length
+    ? reviewed.reduce((best, a) => (rankAttempt(a) > rankAttempt(best) ? a : best))
+    : null;
+
+  const asRef = (a: AttemptRecord | null) =>
+    a ? { attempt: a.attempt, graph: a.graph, critique: a.critique, approved: a.approved } : null;
 
   const meta = {
     question,
     meaning,
     terminalState,
     trainingReady: terminalState === "approved",
-    finalGraph: finalRec?.graph ?? current.graph,
-    finalCritique: finalRec?.critique ?? null,
+    lastAttempt: asRef(lastAttempt),
+    bestAttempt: asRef(bestAttempt),
     attempts: attempts.map((a) => ({
       attempt: a.attempt,
+      graph: a.graph,
       renders: a.renders,
       approved: a.approved,
       critique: a.critique,
       error: a.error,
     })),
-    tokens: { in: totalCost.inTokens, out: totalCost.outTokens },
-    estCostUsd: Number((totalCost.inTokens * IN_COST + totalCost.outTokens * OUT_COST).toFixed(6)),
-    totalLatencyMs: totalCost.latencyMs,
+    tokens: { in: apiCost.inTokens, out: apiCost.outTokens },
+    estCostUsd: Number((apiCost.inTokens * IN_COST + apiCost.outTokens * OUT_COST).toFixed(6)),
+    latencyMs: {
+      plan: planLatencyMs,
+      criticApi: apiCost.latencyMs,
+      render: renderLatencyMs,
+      wallClock: Date.now() - wallStart,
+    },
   };
   writeFileSync(join(dir, "original.json"), JSON.stringify(first.graph, null, 2));
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
-  return { terminalState, critique: finalRec?.critique ?? null };
+  return { terminalState, critique: (bestAttempt ?? lastAttempt)?.critique ?? null };
 }
 
 async function run() {
@@ -284,15 +313,36 @@ async function run() {
     for (const q of questions) {
       console.log(`\n=== ${q} ===`);
       let plan: { steps?: { kind: string; content: string }[] };
+      let planLatencyMs = 0;
       try {
+        const planStart = Date.now();
         const res = await fetch(`${APP}/api/explain`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ prompt: q, model: GEMINI_MODEL }),
         });
+        planLatencyMs = Date.now() - planStart;
+        // A non-ok planner response (e.g. a Gemini 429 surfaced as 502) is a
+        // planner failure — record it distinctly, never count it as a routing
+        // result ("no scene-graph") which would poison the dataset's signal.
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          const dir = join(OUT_DIR, `${slug(q)}-planner-failed`);
+          mkdirSync(dir, { recursive: true });
+          writeFileSync(
+            join(dir, "meta.json"),
+            JSON.stringify(
+              { question: q, terminalState: "planner_failed", httpStatus: res.status, body: body.slice(0, 400), planLatencyMs },
+              null,
+              2,
+            ),
+          );
+          console.log(`  planner_failed: HTTP ${res.status}`);
+          continue;
+        }
         plan = (await res.json()) as typeof plan;
       } catch (e) {
-        console.log(`  plan fetch failed: ${String(e)}`);
+        console.log(`  planner_failed (fetch error): ${String(e)}`);
         continue;
       }
       let idx = 0;
@@ -308,7 +358,7 @@ async function run() {
         if (!content.sceneGraph) continue;
         found++;
         const dir = join(OUT_DIR, `${slug(q)}-${idx++}`);
-        const r = await processGraph(browser, key, q, `a diagram for: ${q}`, content.sceneGraph, dir);
+        const r = await processGraph(browser, key, q, `a diagram for: ${q}`, content.sceneGraph, dir, planLatencyMs);
         console.log(
           `  [${dir.split(/[\\/]/).pop()}] ${r.terminalState}` +
             (r.critique ? ` (readability=${r.critique.readability})` : ""),
