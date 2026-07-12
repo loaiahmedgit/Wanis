@@ -261,6 +261,35 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
 
   if (!groups.length) return null;
 
+  // De-collide labels: the LLM commonly puts two labels near the same point
+  // (an object's own label + a separate label targeting it, or an arrow
+  // label crossing a node label), which the layout can't foresee. Nudge
+  // overlapping text items apart vertically so none stack on each other.
+  const allTexts = groups.flatMap((g) => g.texts);
+  const textBox = (t: TextItem) => {
+    const half = (t.text.length * 8) / 2;
+    return { l: t.x - half, r: t.x + half, t: t.y - 13, b: t.y + 4 };
+  };
+  const overlaps = (a: TextItem, b: TextItem) => {
+    const ba = textBox(a);
+    const bb = textBox(b);
+    return ba.l < bb.r && ba.r > bb.l && ba.t < bb.b && ba.b > bb.t;
+  };
+  // Process in reading order (top-to-bottom); push any colliding later text down.
+  allTexts.sort((a, b) => a.y - b.y || a.x - b.x);
+  for (let i = 0; i < allTexts.length; i++) {
+    for (let pass = 0; pass < 6; pass++) {
+      let moved = false;
+      for (let j = 0; j < i; j++) {
+        if (overlaps(allTexts[i], allTexts[j])) {
+          allTexts[i].y = textBox(allTexts[j]).b + 15;
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+  }
+
   // Overall bounding box -> viewBox with margin. Computed from the layout
   // boxes and anchor points, NOT by parsing numbers out of emitted path
   // data — circle arcs (A rx ry rot flag flag x y) don't alternate x/y, so
