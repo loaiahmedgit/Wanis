@@ -1,7 +1,9 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ExplanationStep } from "../explain/types";
-import { parseDrawingSpec, type Shape } from "../explain/shapes";
-import { drawingDurationMs, easeOutCubic } from "../explain/timing";
+import type { Shape } from "../explain/shapes";
+import { parseDrawingContent } from "../explain/drawingSpec";
+import { getSceneTemplate } from "../explain/sceneTemplates";
+import { drawingDurationMs, easeOutCubic, sceneDurationMs } from "../explain/timing";
 
 interface DrawingProps {
   step: ExplanationStep;
@@ -57,8 +59,11 @@ type Phase = "idle" | "drawing" | "inked";
 
 export function Drawing({ step, isWriting }: DrawingProps) {
   const gradientId = useId();
-  const spec = useMemo(() => parseDrawingSpec(step.content), [step.content]);
-  const primitives = useMemo(() => (spec ? buildPrimitives(spec.shapes) : []), [spec]);
+  const content = useMemo(() => parseDrawingContent(step.content), [step.content]);
+  const primitives = useMemo(
+    () => (content?.mode === "shapes" ? buildPrimitives(content.shapes) : []),
+    [content],
+  );
 
   const svgRef = useRef<SVGSVGElement>(null);
   const elsRef = useRef<(SVGGraphicsElement | null)[]>([]);
@@ -155,6 +160,22 @@ export function Drawing({ step, isWriting }: DrawingProps) {
     return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isWriting, lengths, revealedCount, primitives.length]);
+
+  if (!content) return null;
+
+  if (content.mode === "scene") {
+    const template = getSceneTemplate(content.scene);
+    if (!template) return null;
+    const Scene = template.component;
+    const duration = sceneDurationMs(content.scene, content.params);
+    return (
+      <div className="drawing">
+        <div className="scene-canvas">
+          <Scene params={content.params} isWriting={isWriting} durationMs={duration} />
+        </div>
+      </div>
+    );
+  }
 
   if (!primitives.length) return null;
 

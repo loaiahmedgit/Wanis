@@ -1,5 +1,6 @@
 import type { ExplanationStep } from "./types";
-import { parseDrawingSpec } from "./shapes";
+import { parseDrawingContent } from "./drawingSpec";
+import { getSceneTemplate } from "./sceneTemplates";
 
 /**
  * How long a single text/equation line takes to "write" itself out. Paced
@@ -18,10 +19,23 @@ export function drawingDurationMs(shapeCount: number): number {
   return Math.min(7000, Math.max(1600, 900 + shapeCount * 750));
 }
 
+const DEFAULT_SCENE_MS = 4500;
+
+/** How long a live scene template's animation naturally takes for its params. */
+export function sceneDurationMs(scene: string, params: Record<string, unknown>): number {
+  const template = getSceneTemplate(scene);
+  if (!template) return DEFAULT_SCENE_MS;
+  const validated = template.validateParams(params);
+  if (!validated) return DEFAULT_SCENE_MS;
+  return template.durationMs(validated);
+}
+
 export function stepDurationMs(step: ExplanationStep): number {
   if (step.kind === "drawing") {
-    const spec = parseDrawingSpec(step.content);
-    return drawingDurationMs(spec?.shapes.length ?? 1);
+    const content = parseDrawingContent(step.content);
+    if (!content) return drawingDurationMs(1);
+    if (content.mode === "scene") return sceneDurationMs(content.scene, content.params);
+    return drawingDurationMs(content.shapes.length);
   }
   return lineDurationMs(step.content);
 }
