@@ -9,8 +9,8 @@ interface DrawingProps {
   isWriting: boolean;
 }
 
-const VIEW_W = 320;
-const VIEW_H = 190;
+const VIEW_W = 380;
+const VIEW_H = 230;
 
 type Primitive =
   | { kind: "circle"; cx: number; cy: number; r: number }
@@ -45,6 +45,9 @@ function buildPrimitives(shapes: Shape[]): Primitive[] {
       out.push({ kind: "polygon", points: `${x2},${y2} ${hx1},${hy1} ${hx2},${hy2}` });
     } else if (s.type === "label") {
       out.push({ kind: "text", x: s.x * VIEW_W, y: s.y * VIEW_H, text: s.text });
+    } else if (s.type === "polygon") {
+      const points = s.points.map(([px, py]) => `${px * VIEW_W},${py * VIEW_H}`).join(" ");
+      out.push({ kind: "polygon", points });
     }
   }
   return out;

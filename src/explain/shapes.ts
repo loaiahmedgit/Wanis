@@ -31,8 +31,12 @@ export interface LabelShape {
   y: number;
   text: string;
 }
+export interface PolygonShape {
+  type: "polygon";
+  points: [number, number][];
+}
 
-export type Shape = CircleShape | RectShape | LineShape | ArrowShape | LabelShape;
+export type Shape = CircleShape | RectShape | LineShape | ArrowShape | LabelShape | PolygonShape;
 
 export interface DrawingSpec {
   shapes: Shape[];
@@ -59,6 +63,11 @@ export function parseDrawingSpec(content: string): DrawingSpec | null {
         shapes.push({ type: s.type, x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2 });
       } else if (s.type === "label" && isNum(s.x) && isNum(s.y) && typeof s.text === "string") {
         shapes.push({ type: "label", x: s.x, y: s.y, text: s.text.slice(0, 24) });
+      } else if (s.type === "polygon" && Array.isArray(s.points)) {
+        const points = (s.points as unknown[])
+          .filter((p): p is [number, number] => Array.isArray(p) && isNum(p[0]) && isNum(p[1]))
+          .map((p) => [p[0], p[1]] as [number, number]);
+        if (points.length >= 3) shapes.push({ type: "polygon", points });
       }
     }
     return shapes.length ? { shapes } : null;
