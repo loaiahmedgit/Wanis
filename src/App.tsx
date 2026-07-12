@@ -2,63 +2,71 @@ import { useEffect, useMemo, useState } from "react";
 import { Scene } from "./components/Scene";
 import { DebugPanel } from "./components/DebugPanel";
 import { Toolbar } from "./components/Toolbar";
-import { loadDepthMap } from "./vision/depthMap";
-import { computeConfidence } from "./field/confidence";
+import { getExplanationPlan } from "./explain/getExplanationPlan";
+import { DEFAULT_PROMPT } from "./explain/examples";
+import { layoutPlan } from "./field/layout";
+import type { ExplanationPlan } from "./explain/types";
 import { useFieldStore } from "./state/store";
 import "./App.css";
-
-const DEPTH_MAP_URL = "/depth/hand.png";
 
 export default function App() {
   const gridWidth = useFieldStore((s) => s.gridWidth);
   const gridHeight = useFieldStore((s) => s.gridHeight);
-  const backgroundMode = useFieldStore((s) => s.backgroundMode);
-  const [depthData, setDepthData] = useState<Float32Array | null>(null);
+  const planToken = useFieldStore((s) => s.planToken);
+  const requestNewPlan = useFieldStore((s) => s.requestNewPlan);
 
+  const [promptInput, setPromptInput] = useState(DEFAULT_PROMPT);
+  const [plan, setPlan] = useState<ExplanationPlan | null>(null);
+  const [isThinking, setIsThinking] = useState(false);
+
+  async function runPrompt(prompt: string) {
+    setIsThinking(true);
+    const nextPlan = await getExplanationPlan(prompt);
+    setPlan(nextPlan);
+    setIsThinking(false);
+    requestNewPlan();
+  }
+
+  // Show something immediately on load.
   useEffect(() => {
-    let cancelled = false;
-    loadDepthMap(DEPTH_MAP_URL, gridWidth, gridHeight).then((data) => {
-      if (!cancelled) setDepthData(data);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [gridWidth, gridHeight]);
+    runPrompt(DEFAULT_PROMPT);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  const confidenceData = useMemo(
-    () => (depthData ? computeConfidence(depthData, gridWidth, gridHeight) : null),
-    [depthData, gridWidth, gridHeight],
+  const steps = useMemo(
+    () => (plan ? layoutPlan(plan, gridWidth, gridHeight) : []),
+    [plan, gridWidth, gridHeight],
   );
+
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!promptInput.trim() || isThinking) return;
+    runPrompt(promptInput);
+  }
 
   return (
     <div className="app-root">
-      {depthData && confidenceData ? (
-        <Scene
-          depthData={depthData}
-          confidenceData={confidenceData}
-          gridWidth={gridWidth}
-          gridHeight={gridHeight}
-        />
-      ) : (
-        <div className="loading">Loading perception field&hellip;</div>
+      {steps.length > 0 && (
+        <Scene steps={steps} gridWidth={gridWidth} gridHeight={gridHeight} planToken={planToken} />
       )}
 
-      {backgroundMode && (
-        <div className="mock-foreground">
-          <div className="mock-eyebrow">Ambient background demo</div>
-          <h1>This is what the field looks like as a backdrop.</h1>
-          <p>
-            Dimmed, pulled back, slowly auto-rotating — meant to sit behind real
-            content rather than be the focus. Toggle "Full field view" to inspect
-            it directly.
-          </p>
-        </div>
-      )}
+      <form className="prompt-bar" onSubmit={handleSubmit}>
+        <input
+          type="text"
+          value={promptInput}
+          onChange={(e) => setPromptInput(e.target.value)}
+          placeholder="Ask Wanis to explain something…"
+          disabled={isThinking}
+        />
+        <button type="submit" disabled={isThinking}>
+          {isThinking ? "Thinking…" : "Explain"}
+        </button>
+      </form>
 
       <div className="hud">
         <div className="hud-title">
           <span className="hud-dot" />
-          Perception Field <span className="hud-phase">— Phase 1/2 prototype</span>
+          Perception Field <span className="hud-phase">— explanation-board prototype</span>
         </div>
         <DebugPanel />
         <Toolbar pinCount={gridWidth * gridHeight} />

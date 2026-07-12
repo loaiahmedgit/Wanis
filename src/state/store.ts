@@ -4,59 +4,47 @@ interface FieldStore {
   gridWidth: number;
   gridHeight: number;
   spacing: number;
-  depthScale: number;
+  riseHeight: number;
   springStiffness: number;
   damping: number;
   animationSpeed: number;
-  /** How strongly low-confidence (edge/uncertain) pins jitter before settling. */
-  instabilityAmount: number;
-  /** Seconds it takes the field to go from "just formed, everything noisy" to fully settled. */
-  settleDuration: number;
+  /** Seconds between each explanation step being revealed. */
+  stepIntervalSeconds: number;
+  /** How long a newly-activating pin flickers before resolving to its real height. */
+  flickerSeconds: number;
 
-  /** Ambient background usage (dim, pulled back) vs. full inspectable view. */
-  backgroundMode: boolean;
+  /** Bumped whenever a new plan starts drawing from scratch. */
+  planToken: number;
 
-  /** Bumped to trigger a camera reset; Scene watches this and calls controls.reset(). */
-  cameraResetToken: number;
-  /** Bumped to trigger a replay (flatten -> reform); PinField watches this. */
-  replayToken: number;
-
-  setDepthScale: (v: number) => void;
+  setSpacing: (v: number) => void;
+  setRiseHeight: (v: number) => void;
   setSpringStiffness: (v: number) => void;
   setDamping: (v: number) => void;
-  setSpacing: (v: number) => void;
   setAnimationSpeed: (v: number) => void;
-  setInstabilityAmount: (v: number) => void;
-  setSettleDuration: (v: number) => void;
-  toggleBackgroundMode: () => void;
-  requestCameraReset: () => void;
-  requestReplay: () => void;
+  setStepIntervalSeconds: (v: number) => void;
+  setFlickerSeconds: (v: number) => void;
+  requestNewPlan: () => void;
 }
 
 export const useFieldStore = create<FieldStore>((set) => ({
-  gridWidth: 128,
-  gridHeight: 128,
-  spacing: 0.058,
-  depthScale: 3.2,
-  springStiffness: 90,
-  damping: 12,
+  gridWidth: 220,
+  gridHeight: 130,
+  spacing: 0.05,
+  riseHeight: 0.9,
+  springStiffness: 140,
+  damping: 14,
   animationSpeed: 1,
-  instabilityAmount: 0.35,
-  settleDuration: 3.5,
+  stepIntervalSeconds: 1.4,
+  flickerSeconds: 0.35,
 
-  backgroundMode: true,
+  planToken: 0,
 
-  cameraResetToken: 0,
-  replayToken: 0,
-
-  setDepthScale: (v) => set({ depthScale: v }),
+  setSpacing: (v) => set({ spacing: v }),
+  setRiseHeight: (v) => set({ riseHeight: v }),
   setSpringStiffness: (v) => set({ springStiffness: v }),
   setDamping: (v) => set({ damping: v }),
-  setSpacing: (v) => set({ spacing: v }),
   setAnimationSpeed: (v) => set({ animationSpeed: v }),
-  setInstabilityAmount: (v) => set({ instabilityAmount: v }),
-  setSettleDuration: (v) => set({ settleDuration: v }),
-  toggleBackgroundMode: () => set((s) => ({ backgroundMode: !s.backgroundMode })),
-  requestCameraReset: () => set((s) => ({ cameraResetToken: s.cameraResetToken + 1 })),
-  requestReplay: () => set((s) => ({ replayToken: s.replayToken + 1 })),
+  setStepIntervalSeconds: (v) => set({ stepIntervalSeconds: v }),
+  setFlickerSeconds: (v) => set({ flickerSeconds: v }),
+  requestNewPlan: () => set((s) => ({ planToken: s.planToken + 1 })),
 }));

@@ -2,131 +2,156 @@ import { useEffect, useMemo, useRef } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from "three";
 import { stepSpring } from "../field/spring";
+import { mergeInto } from "../field/rasterize";
+import type { LaidOutStep } from "../field/layout";
 import { useFieldStore } from "../state/store";
 
 interface PinFieldProps {
-  depthData: Float32Array;
-  confidenceData: Float32Array;
+  steps: LaidOutStep[];
   gridWidth: number;
   gridHeight: number;
+  /** Bumped whenever a brand-new plan should start drawing from scratch. */
+  planToken: number;
 }
 
-const PIN_RADIUS = 0.02;
-const PIN_LENGTH = 1; // unit length; per-instance Y scale multiplies this
-const MIN_HEIGHT = 0.025;
-const MAX_DT = 1 / 20; // clamp so a stalled tab doesn't launch pins on resume
-const JITTER_FREQ_BASE = 2.2;
+const PIN_RADIUS = 0.012;
+const PIN_LENGTH = 1;
+const MIN_HEIGHT = 0.018;
+const MAX_DT = 1 / 20;
+const SETTLE_EPS = 0.004;
+// Rotates the capsule's local Y (length) axis onto world Z, so pins extrude
+// toward the camera off a board that lies flat in the XY plane.
+const PIN_ORIENTATION = new THREE.Quaternion().setFromAxisAngle(
+  new THREE.Vector3(1, 0, 0),
+  Math.PI / 2,
+);
 
-const baseColorFull = new THREE.Color("#1c2a3a");
-const tipColorFull = new THREE.Color("#4fd6ff");
-const baseColorDim = new THREE.Color("#0a1119");
-const tipColorDim = new THREE.Color("#1c4a5c");
+const baseColor = new THREE.Color("#132030");
+const onColor = new THREE.Color("#eaf8ff");
+const flickerColor = new THREE.Color("#4fd6ff");
 const tmpColor = new THREE.Color();
 const tmpMatrix = new THREE.Matrix4();
 const tmpPosition = new THREE.Vector3();
-const tmpQuaternion = new THREE.Quaternion();
 const tmpScale = new THREE.Vector3(1, 1, 1);
 
-/** Deterministic pseudo-random in [0,1) from an integer index — avoids
- * needing a real RNG dependency just to vary per-pin jitter phase. */
 function hash01(i: number): number {
   const s = Math.sin(i * 12.9898) * 43758.5453;
   return s - Math.floor(s);
 }
 
-export function PinField({ depthData, confidenceData, gridWidth, gridHeight }: PinFieldProps) {
+export function PinField({ steps, gridWidth, gridHeight, planToken }: PinFieldProps) {
   const meshRef = useRef<THREE.InstancedMesh>(null);
   const count = gridWidth * gridHeight;
-  const backgroundMode = useFieldStore((s) => s.backgroundMode);
+  const spacing = useFieldStore((s) => s.spacing);
 
-  // Animation state lives in refs/typed arrays, NOT React state — updated every
-  // frame directly, so the render loop never fights React's cycle.
   const current = useRef<Float32Array>(new Float32Array(count));
   const velocity = useRef<Float32Array>(new Float32Array(count));
-  const target = useRef<Float32Array>(depthData);
-  const confidence = useRef<Float32Array>(confidenceData);
-  const lastReplayToken = useRef(useFieldStore.getState().replayToken);
-  const settleStart = useRef(performance.now());
+  const boardTarget = useRef<Float32Array>(new Float32Array(count));
+  const flickerUntil = useRef<Float32Array>(new Float32Array(count));
+  const activeSet = useRef<Set<number>>(new Set());
+  const revealedSteps = useRef(0);
+  const nextRevealAt = useRef(0);
+  const initializedGeometry = useRef(false);
 
-  useEffect(() => {
-    target.current = depthData;
-  }, [depthData]);
-  useEffect(() => {
-    confidence.current = confidenceData;
-  }, [confidenceData]);
-
-  const jitterPhase = useMemo(() => {
-    const arr = new Float32Array(count);
-    for (let i = 0; i < count; i++) arr[i] = hash01(i) * Math.PI * 2;
-    return arr;
-  }, [count]);
-
-  const geometry = useMemo(
-    () => new THREE.CapsuleGeometry(PIN_RADIUS, PIN_LENGTH, 1, 5),
-    [],
-  );
-
-  const spacing = useFieldStore((s) => s.spacing);
   const positions = useMemo(() => {
-    const arr = new Float32Array(count * 2); // x, z per pin
+    const arr = new Float32Array(count * 2); // x, y per pin (board-plane coords)
     const offsetX = ((gridWidth - 1) * spacing) / 2;
-    const offsetZ = ((gridHeight - 1) * spacing) / 2;
+    const offsetY = ((gridHeight - 1) * spacing) / 2;
     for (let gy = 0; gy < gridHeight; gy++) {
       for (let gx = 0; gx < gridWidth; gx++) {
         const i = gy * gridWidth + gx;
         arr[i * 2] = gx * spacing - offsetX;
-        arr[i * 2 + 1] = gy * spacing - offsetZ;
+        arr[i * 2 + 1] = offsetY - gy * spacing; // row 0 at the top
       }
     }
     return arr;
   }, [gridWidth, gridHeight, count, spacing]);
 
-  const baseColor = backgroundMode ? baseColorDim : baseColorFull;
-  const tipColor = backgroundMode ? tipColorDim : tipColorFull;
+  const geometry = useMemo(() => new THREE.CapsuleGeometry(PIN_RADIUS, PIN_LENGTH, 1, 5), []);
+
+  // One-time (or grid-change) full pass so every pin has a valid resting
+  // matrix before the active-set loop starts only touching a subset.
+  useEffect(() => {
+    const mesh = meshRef.current;
+    if (!mesh) return;
+    current.current.fill(0);
+    velocity.current.fill(0);
+    boardTarget.current.fill(0);
+    flickerUntil.current.fill(0);
+    activeSet.current.clear();
+
+    for (let i = 0; i < count; i++) {
+      const x = positions[i * 2];
+      const y = positions[i * 2 + 1];
+      tmpPosition.set(x, y, MIN_HEIGHT / 2);
+      tmpScale.set(1, MIN_HEIGHT, 1);
+      tmpMatrix.compose(tmpPosition, PIN_ORIENTATION, tmpScale);
+      mesh.setMatrixAt(i, tmpMatrix);
+      mesh.setColorAt(i, baseColor);
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    initializedGeometry.current = true;
+  }, [positions, count]);
+
+  // New plan (or reset): start revealing steps from the beginning again.
+  useEffect(() => {
+    revealedSteps.current = 0;
+    nextRevealAt.current = 0;
+    boardTarget.current.fill(0);
+    // Every pin that was on needs to animate back down; simplest correct
+    // approach for a full reset is to let the one-time-pass effect above
+    // (which also runs on grid/position identity change) handle geometry —
+    // here we just need velocities zeroed so a fresh reveal starts clean.
+    velocity.current.fill(0);
+    activeSet.current.clear();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [planToken]);
 
   useFrame((state, rawDt) => {
     const mesh = meshRef.current;
-    if (!mesh) return;
+    if (!mesh || !initializedGeometry.current) return;
 
-    const {
-      depthScale,
-      springStiffness,
-      damping,
-      animationSpeed,
-      replayToken,
-      instabilityAmount,
-      settleDuration,
-    } = useFieldStore.getState();
-
-    if (replayToken !== lastReplayToken.current) {
-      lastReplayToken.current = replayToken;
-      current.current.fill(0);
-      velocity.current.fill(0);
-      settleStart.current = performance.now();
-    }
+    const { springStiffness, damping, animationSpeed, riseHeight, stepIntervalSeconds, flickerSeconds } =
+      useFieldStore.getState();
 
     const dt = Math.min(rawDt, MAX_DT) * animationSpeed;
+    const now = state.clock.elapsedTime;
+
+    // Reveal the next step on a timer.
+    if (revealedSteps.current < steps.length && now >= nextRevealAt.current) {
+      const next = steps[revealedSteps.current];
+      const before = boardTarget.current;
+      const layerCopy = before.slice();
+      mergeInto(layerCopy, next.layer);
+      for (let i = 0; i < count; i++) {
+        if (layerCopy[i] > before[i] + 0.001) {
+          before[i] = layerCopy[i];
+          flickerUntil.current[i] = now + flickerSeconds;
+          activeSet.current.add(i);
+        }
+      }
+      revealedSteps.current += 1;
+      nextRevealAt.current = now + stepIntervalSeconds;
+    }
+
     const cur = current.current;
     const vel = velocity.current;
-    const tgt = target.current;
-    const conf = confidence.current;
-    const time = state.clock.elapsedTime;
+    const tgt = boardTarget.current;
+    const flick = flickerUntil.current;
 
-    const settleElapsed = (performance.now() - settleStart.current) / 1000;
-    const settleProgress = Math.min(1, settleElapsed / settleDuration);
-    const globalInstability = instabilityAmount * (1 - settleProgress);
-
-    for (let i = 0; i < count; i++) {
-      const pinInstability = globalInstability * (1 - conf[i]);
-      const jitter =
-        pinInstability > 0.001
-          ? Math.sin(time * JITTER_FREQ_BASE + jitterPhase[i]) * pinInstability * depthScale * 0.18
-          : 0;
+    const toRemove: number[] = [];
+    activeSet.current.forEach((i) => {
+      const finalTarget = tgt[i] * riseHeight;
+      const isFlickering = now < flick[i];
+      const effectiveTarget = isFlickering
+        ? finalTarget * (0.25 + hash01(i * 7919 + Math.floor(now * 30)) * 0.9)
+        : finalTarget;
 
       const [nextValue, nextVelocity] = stepSpring(
         cur[i],
         vel[i],
-        tgt[i] * depthScale + jitter,
+        effectiveTarget,
         springStiffness,
         damping,
         dt,
@@ -136,20 +161,28 @@ export function PinField({ depthData, confidenceData, gridWidth, gridHeight }: P
 
       const height = Math.max(MIN_HEIGHT, nextValue);
       const x = positions[i * 2];
-      const z = positions[i * 2 + 1];
-
-      tmpPosition.set(x, (height * PIN_LENGTH) / 2, z);
+      const y = positions[i * 2 + 1];
+      tmpPosition.set(x, y, height / 2);
       tmpScale.set(1, height, 1);
-      tmpMatrix.compose(tmpPosition, tmpQuaternion, tmpScale);
+      tmpMatrix.compose(tmpPosition, PIN_ORIENTATION, tmpScale);
       mesh.setMatrixAt(i, tmpMatrix);
 
-      const brightness = Math.min(1, height / Math.max(0.001, depthScale));
-      tmpColor.copy(baseColor).lerp(tipColor, brightness);
+      tmpColor.copy(baseColor).lerp(isFlickering ? flickerColor : onColor, Math.min(1, height / Math.max(0.001, riseHeight)));
       mesh.setColorAt(i, tmpColor);
-    }
 
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      const settled =
+        !isFlickering && Math.abs(finalTarget - nextValue) < SETTLE_EPS && Math.abs(nextVelocity) < SETTLE_EPS;
+      if (settled) toRemove.push(i);
+    });
+
+    if (toRemove.length) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      for (const i of toRemove) activeSet.current.delete(i);
+    } else if (activeSet.current.size > 0) {
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    }
   });
 
   return (
@@ -157,13 +190,11 @@ export function PinField({ depthData, confidenceData, gridWidth, gridHeight }: P
       <meshStandardMaterial
         vertexColors
         color="#ffffff"
-        emissive={backgroundMode ? "#041420" : "#0b3a4a"}
-        emissiveIntensity={backgroundMode ? 0.18 : 0.35}
-        roughness={0.45}
-        metalness={0.15}
+        emissive="#0b3a4a"
+        emissiveIntensity={0.4}
+        roughness={0.4}
+        metalness={0.1}
         toneMapped={false}
-        transparent={backgroundMode}
-        opacity={backgroundMode ? 0.55 : 1}
       />
     </instancedMesh>
   );

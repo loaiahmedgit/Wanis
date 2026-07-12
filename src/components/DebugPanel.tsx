@@ -11,30 +11,30 @@ interface SliderDef {
 
 export function DebugPanel() {
   const {
-    depthScale,
+    riseHeight,
     springStiffness,
     damping,
     spacing,
     animationSpeed,
-    instabilityAmount,
-    settleDuration,
-    setDepthScale,
+    stepIntervalSeconds,
+    flickerSeconds,
+    setRiseHeight,
     setSpringStiffness,
     setDamping,
     setSpacing,
     setAnimationSpeed,
-    setInstabilityAmount,
-    setSettleDuration,
+    setStepIntervalSeconds,
+    setFlickerSeconds,
   } = useFieldStore();
 
   const sliders: SliderDef[] = [
-    { label: "Depth scale", value: depthScale, min: 0.5, max: 6, step: 0.1, onChange: setDepthScale },
-    { label: "Spring stiffness", value: springStiffness, min: 10, max: 220, step: 1, onChange: setSpringStiffness },
-    { label: "Damping", value: damping, min: 1, max: 40, step: 0.5, onChange: setDamping },
-    { label: "Grid spacing", value: spacing, min: 0.02, max: 0.24, step: 0.002, onChange: setSpacing },
+    { label: "Pin rise height", value: riseHeight, min: 0.2, max: 2, step: 0.05, onChange: setRiseHeight },
+    { label: "Spring stiffness", value: springStiffness, min: 20, max: 300, step: 2, onChange: setSpringStiffness },
+    { label: "Damping", value: damping, min: 2, max: 40, step: 0.5, onChange: setDamping },
+    { label: "Pin spacing", value: spacing, min: 0.02, max: 0.1, step: 0.002, onChange: setSpacing },
     { label: "Animation speed", value: animationSpeed, min: 0.1, max: 3, step: 0.05, onChange: setAnimationSpeed },
-    { label: "Instability amount", value: instabilityAmount, min: 0, max: 1, step: 0.02, onChange: setInstabilityAmount },
-    { label: "Settle duration (s)", value: settleDuration, min: 0.5, max: 8, step: 0.1, onChange: setSettleDuration },
+    { label: "Step interval (s)", value: stepIntervalSeconds, min: 0.4, max: 4, step: 0.1, onChange: setStepIntervalSeconds },
+    { label: "Flicker duration (s)", value: flickerSeconds, min: 0, max: 1.2, step: 0.05, onChange: setFlickerSeconds },
   ];
 
   return (
