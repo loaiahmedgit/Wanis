@@ -111,13 +111,18 @@ When a drawing IS warranted, there are three tools — pick in this priority ord
      horizontally across to another (e.g. a circle point's height onto a graph).
    - {"id":"...","type":"arrowBetween","from":"<id>","to":"<id>","label":"..."} — an arrow between two
      objects; use for flow, cause->effect, movement, relationships.
-   - {"id":"...","type":"cycle","members":["<id>","<id>",...],"direction":"clockwise"|"counterclockwise",
-     "label":"..."} — a CYCLE. Declare the member boxes/circles separately, then list their ids IN ORDER
-     here. The engine arranges them evenly on a ring and draws the looping arrows for you (including the
-     closing last->first), so it reads as a real loop, not a row. Use this for ANY cyclic process — the
-     water cycle, rock cycle, carbon/nitrogen cycle, a life cycle, the seasons. Do NOT add your own
-     arrowBetween arrows between cycle members (the cycle draws them) and do NOT constrain cycle members
-     (the ring positions them). The optional "label" is shown in the middle of the ring.
+   - {"id":"...","type":"cycle","members":["<id>","<id>","<id>",...],"direction":"clockwise"|
+     "counterclockwise","label":"...","transitions":[{"from":"<id>","to":"<id>","label":"..."}]} — a CYCLE.
+     Declare the member boxes/circles separately (at least 3), then list their ids IN ORDER here. The engine
+     arranges them evenly on a ring and draws the looping arrows for you (including the closing last->first),
+     so it reads as a real loop, not a row. Use this for ANY cyclic process — the water cycle, rock cycle,
+     carbon/nitrogen cycle, a life cycle, the seasons. Do NOT add your own arrowBetween arrows between cycle
+     members (the cycle draws them) and do NOT constrain cycle members (the ring positions them). The
+     optional "label" shows in the middle. STRONGLY PREFER to name each step: "transitions" labels the
+     arrows — each {from,to,label} must connect two CONSECUTIVE members (in your member order, and the
+     closing last->first pair is allowed). Use it to name the PROCESS that turns one stage into the next
+     (e.g. rock cycle: {"from":"magma","to":"igneous","label":"cooling"}). An unlabeled cycle is fine but a
+     labeled one teaches far more.
    - {"id":"...","type":"label","text":"...","near":"<id>","placement":"above"|"below"|"left"|"right"} —
      a text label placed cleanly next to another object (placement optional, default below).
    - {"id":"...","type":"freeSketch","meaning":"...","strokes":["M .. C .. Z", ...]} — the ESCAPE HATCH,
@@ -173,10 +178,12 @@ commentary.
 - RIGHT (scene graph): the structure of an atom — {"sceneGraph":{"objects":[{"id":"shell","type":
   "circleShape","label":"electron shell","size":2.3},{"id":"nucleus","type":"circleShape","label":
   "nucleus","size":0.7}],"constraints":[["alignedX","nucleus","shell"],["alignedY","nucleus","shell"]]}}
-- RIGHT (scene graph, CYCLE): the water cycle — {"sceneGraph":{"objects":[{"id":"evap","type":"box",
-  "label":"Evaporation"},{"id":"cond","type":"box","label":"Condensation"},{"id":"precip","type":"box",
-  "label":"Precipitation"},{"id":"collect","type":"box","label":"Collection"},{"id":"cyc","type":"cycle",
-  "members":["evap","cond","precip","collect"],"direction":"clockwise"}],"constraints":[]}}
+- RIGHT (scene graph, CYCLE with labeled transitions): the rock cycle — {"sceneGraph":{"objects":[
+  {"id":"igneous","type":"box","label":"Igneous"},{"id":"sediment","type":"box","label":"Sedimentary"},
+  {"id":"meta","type":"box","label":"Metamorphic"},{"id":"cyc","type":"cycle","members":["igneous",
+  "sediment","meta"],"direction":"clockwise","transitions":[{"from":"igneous","to":"sediment","label":
+  "weathering"},{"from":"sediment","to":"meta","label":"heat & pressure"},{"from":"meta","to":"igneous",
+  "label":"melting"}]}],"constraints":[]}}
 
 STEP KINDS
 - "title": a short heading for what's being explained (e.g. "Solve for x"). Under 30 characters.

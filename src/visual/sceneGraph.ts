@@ -87,12 +87,21 @@ export interface FreeSketchObject {
  * so the diagram reads as an actual loop instead of a cramped row. The model
  * never supplies coordinates or arrow geometry.
  */
+/** A named transition on the arrow between two consecutive cycle members. */
+export interface CycleTransition {
+  from: string;
+  to: string;
+  label: string;
+}
+
 export interface CycleObject {
   id: string;
   type: "cycle";
   members: string[];
   direction: "clockwise" | "counterclockwise";
   label?: string;
+  /** Optional labels for the generated arrows; each must connect consecutive members. */
+  transitions?: CycleTransition[];
 }
 
 export type SceneObject =
@@ -201,14 +210,15 @@ export function parseSceneGraph(raw: unknown): SceneGraph | null {
     } else if (s.type === "cycle" && Array.isArray(s.members)) {
       const members = (s.members as unknown[]).filter(isStr).slice(0, 8);
       const direction = s.direction === "counterclockwise" ? "counterclockwise" : "clockwise";
-      if (members.length >= 2) {
-        objects.push({
-          id,
-          type: "cycle",
-          members,
-          direction,
-          label: isStr(s.label) ? s.label.slice(0, 24) : undefined,
-        });
+      const transitions = Array.isArray(s.transitions)
+        ? (s.transitions as unknown[])
+            .map((t) => t as Record<string, unknown>)
+            .filter((t) => t && isStr(t.from) && isStr(t.to) && isStr(t.label))
+            .map((t) => ({ from: t.from as string, to: t.to as string, label: (t.label as string).slice(0, 20) }))
+        : undefined;
+      // Need >= 3 to form a real ring; a 2-member "cycle" is just A<->B.
+      if (members.length >= 3) {
+        objects.push({ id, type: "cycle", members, direction, label: isStr(s.label) ? s.label.slice(0, 24) : undefined, transitions });
       }
     } else {
       continue;
@@ -234,13 +244,25 @@ export function parseSceneGraph(raw: unknown): SceneGraph | null {
   const RING_MEMBER_TYPES = new Set(["box", "circleShape", "unitCircle", "waveGraph"]);
   const placeableIds = new Set(objects.filter((o) => RING_MEMBER_TYPES.has(o.type)).map((o) => o.id));
 
+  // No object may belong to two cycles — the ring positions would fight. Claim
+  // members greedily in declaration order; a later cycle can't reuse them.
+  const claimedByCycle = new Set<string>();
+
   // Drop reference objects whose targets don't exist rather than failing whole graph.
   const valid = objects
-    .map((o) => {
+    .map((o): SceneObject | null => {
       if (o.type === "cycle") {
-        // Keep only members that exist AND are ring-placeable, in order.
-        const members = o.members.filter((m) => placeableIds.has(m));
-        return members.length >= 2 ? { ...o, members } : null;
+        const members = o.members.filter((m) => placeableIds.has(m) && !claimedByCycle.has(m));
+        if (members.length < 3) return null;
+        members.forEach((m) => claimedByCycle.add(m));
+        // Keep only transitions that connect CONSECUTIVE members (incl. the
+        // closing last->first edge); the arrows only exist between those.
+        const pairs = new Set(members.map((m, i) => `${m}|${members[(i + 1) % members.length]}`));
+        const transitions = o.transitions?.filter((t) => pairs.has(`${t.from}|${t.to}`));
+        const cycle: CycleObject = { ...o, members };
+        if (transitions && transitions.length) cycle.transitions = transitions;
+        else delete cycle.transitions;
+        return cycle;
       }
       return o;
     })

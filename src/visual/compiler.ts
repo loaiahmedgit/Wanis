@@ -176,7 +176,13 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   if (!boxes.size) return null;
   const groups: StrokeGroup[] = [];
 
-  for (const o of graph.objects) {
+  // Emit member objects before cycle arrows regardless of JSON order — the
+  // StrokePlayer draws groups in sequence, so a cycle declared before its
+  // members would otherwise trace its arrows before the boxes they connect.
+  // Stable sort: cycles last, everything else keeps its declared order.
+  const emitOrder = [...graph.objects].sort((a, b) => (a.type === "cycle" ? 1 : 0) - (b.type === "cycle" ? 1 : 0));
+
+  for (const o of emitOrder) {
     const strokes: StrokeItem[] = [];
     const texts: TextItem[] = [];
     const box = boxes.get(o.id);
@@ -215,6 +221,20 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
           strokes.push({ d: `M ${p1.x} ${p1.y} Q ${ctrl.x} ${ctrl.y} ${p2.x} ${p2.y}`, css: "vp-primary" });
           const headAngle = Math.atan2(p2.y - ctrl.y, p2.x - ctrl.x);
           strokes.push({ d: arrowHeadPath(p2.x, p2.y, headAngle), css: "vp-primary" });
+
+          // Optional transition label, placed just outside this arrow's arc.
+          const fromId = o.members[i];
+          const toId = o.members[(i + 1) % n];
+          const tr = o.transitions?.find((t) => t.from === fromId && t.to === toId);
+          if (tr) {
+            texts.push({
+              x: mx + (ox / olen) * (bow + 16),
+              y: my + (oy / olen) * (bow + 16),
+              text: tr.label,
+              css: "vp-label",
+              anchor: "middle",
+            });
+          }
         }
         if (o.label) texts.push({ x: ringC.x, y: ringC.y, text: o.label, css: "vp-label", anchor: "middle" });
       }
