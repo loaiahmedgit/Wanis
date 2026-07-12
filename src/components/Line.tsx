@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ExplanationStep } from "../explain/types";
 import { lineDurationMs } from "../explain/timing";
 import { getHandFont, type HandWeight } from "../explain/handFonts";
+import { layoutGlyphs } from "../explain/glyphLayout";
 
 interface LineProps {
   step: ExplanationStep;
@@ -26,15 +27,12 @@ export function Line({ step, isWriting }: LineProps) {
   // One real <path> per glyph, so each letter's own outline can be sampled
   // point-by-point as it draws. Memoized — opentype.js's outline generation
   // is real work and this must not re-run on every animation frame.
-  const glyphs = useMemo(
-    () => (font ? font.getPaths(step.content, 2, baseline, size).map((p) => p.toPathData(2)) : []),
+  const layout = useMemo(
+    () => (font ? layoutGlyphs(font, step.content, 2, baseline, size) : { glyphs: [], width: 16 }),
     [font, step.content, baseline, size],
   );
-  const width = useMemo(() => {
-    if (!font) return 16;
-    const box = font.getPath(step.content, 2, baseline, size).getBoundingBox();
-    return Math.max(16, Math.ceil(box.x2) + 6);
-  }, [font, step.content, baseline, size]);
+  const glyphs = useMemo(() => layout.glyphs.map((g) => g.d), [layout]);
+  const width = Math.max(16, Math.ceil(layout.width) + 6);
 
   const svgRef = useRef<SVGSVGElement>(null);
   // Real DOM path elements, looked up once via the DOM rather than per-glyph
