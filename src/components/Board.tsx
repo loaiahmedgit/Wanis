@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import type { ExplanationStep } from "../explain/types";
-import { lineDurationMs, LINE_PAUSE_MS } from "../explain/timing";
+import { stepDurationMs, LINE_PAUSE_MS } from "../explain/timing";
 import { Line } from "./Line";
+import { Drawing } from "./Drawing";
 
 interface BoardProps {
   steps: ExplanationStep[];
@@ -20,7 +21,7 @@ export function Board({ steps, planToken }: BoardProps) {
   useEffect(() => {
     if (revealedCount >= steps.length) return;
     const step = steps[revealedCount];
-    const wait = lineDurationMs(step.content) + LINE_PAUSE_MS;
+    const wait = stepDurationMs(step) + LINE_PAUSE_MS;
     const timer = setTimeout(() => setRevealedCount((c) => c + 1), wait);
     return () => clearTimeout(timer);
   }, [revealedCount, steps]);
@@ -29,9 +30,13 @@ export function Board({ steps, planToken }: BoardProps) {
 
   return (
     <div className="board">
-      {visibleSteps.map((step, i) => (
-        <Line key={`${planToken}-${step.id}`} step={step} isWriting={i === revealedCount} />
-      ))}
+      {visibleSteps.map((step, i) =>
+        step.kind === "drawing" ? (
+          <Drawing key={`${planToken}-${step.id}`} step={step} isWriting={i === revealedCount} />
+        ) : (
+          <Line key={`${planToken}-${step.id}`} step={step} isWriting={i === revealedCount} />
+        ),
+      )}
     </div>
   );
 }

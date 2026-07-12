@@ -1,7 +1,7 @@
 import type { ExplanationPlan, ExplanationStep, ExplanationStepKind } from "./types";
 import { EXAMPLE_PLANS, findExamplePlan } from "./examples";
 
-const VALID_KINDS: ExplanationStepKind[] = ["title", "text", "equation"];
+const VALID_KINDS: ExplanationStepKind[] = ["title", "text", "equation", "drawing"];
 
 interface ApiResponse {
   prompt: string;

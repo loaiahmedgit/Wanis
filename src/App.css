@@ -85,8 +85,52 @@
   --ink-color: #b3541e;
 }
 
+.drawing {
+  display: flex;
+}
+
+.drawing-canvas {
+  position: relative;
+  overflow: visible;
+}
+
+.drawing-canvas svg {
+  display: block;
+  overflow: visible;
+}
+
+.shape-el {
+  fill: none;
+  stroke: #b3541e;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: fill 220ms ease-out 40ms;
+}
+
+.shape-el.phase-inked {
+  fill: rgba(179, 84, 30, 0.12);
+}
+
+.shape-label {
+  font-family: "Kalam", cursive;
+  font-size: 12px;
+  fill: #5a5a66;
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 320ms ease-out, transform 320ms ease-out;
+}
+
+.shape-label.phase-drawing,
+.shape-label.phase-inked {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .line-glyphs {
+  .line-glyphs,
+  .shape-el,
+  .shape-label {
     transition-duration: 1ms !important;
   }
   .pen-icon {

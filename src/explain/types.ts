@@ -1,4 +1,4 @@
-export type ExplanationStepKind = "title" | "text" | "equation";
+export type ExplanationStepKind = "title" | "text" | "equation" | "drawing";
 
 export interface ExplanationStep {
   id: string;

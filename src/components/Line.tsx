@@ -10,7 +10,7 @@ interface LineProps {
   isWriting: boolean;
 }
 
-const SIZE_BY_KIND: Record<ExplanationStep["kind"], { size: number; weight: HandWeight }> = {
+const SIZE_BY_KIND: Record<Exclude<ExplanationStep["kind"], "drawing">, { size: number; weight: HandWeight }> = {
   title: { size: 38, weight: "bold" },
   text: { size: 25, weight: "regular" },
   equation: { size: 30, weight: "bold" },
@@ -19,7 +19,7 @@ const SIZE_BY_KIND: Record<ExplanationStep["kind"], { size: number; weight: Hand
 type GlyphPhase = "idle" | "drawing" | "inked";
 
 export function Line({ step, isWriting }: LineProps) {
-  const { size, weight } = SIZE_BY_KIND[step.kind];
+  const { size, weight } = SIZE_BY_KIND[step.kind as Exclude<ExplanationStep["kind"], "drawing">];
   const font = getHandFont(weight);
   const baseline = size * 1.2;
   const height = Math.ceil(size * 1.7);
