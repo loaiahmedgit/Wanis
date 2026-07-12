@@ -34,7 +34,9 @@ const unitCircleWaveTemplate: SceneTemplate<UnitCircleWaveParams> = {
     const cycles = Math.round(clamp(cyclesRaw, 1, 3));
     return { function: fn, cycles };
   },
-  durationMs: (params) => clamp(params.cycles * 4500, 4000, 14000),
+  // Total scene time: the full-stage intro choreography (circle draw-in, radius
+  // grow, guides, camera pull-back — ~3.4s) + the rotation itself + a settle beat.
+  durationMs: (params) => 3400 + clamp(params.cycles * 4500, 4000, 14000) + 1200,
   promptHint:
     '"unit-circle-wave" {"function":"sin"|"cos","cycles":1-3} — a point sweeps around a unit circle while ' +
     "its height live-draws the sin or cos wave next to it. Use for trigonometry, circular motion, or how a " +
