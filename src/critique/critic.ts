@@ -24,6 +24,45 @@ export interface Critique {
   needsRevision: boolean;
 }
 
+/**
+ * Runtime-validate + clamp a raw critique response. The Gemini schema makes
+ * the shape likely but not guaranteed; a bare `as Critique` cast gives zero
+ * runtime protection. Returns a safe, fully-populated Critique (never throws
+ * on a merely-malformed response — coerces/defaults instead), or null only
+ * if the input isn't an object at all.
+ */
+export function parseCritique(raw: unknown): Critique | null {
+  if (!raw || typeof raw !== "object") return null;
+  const o = raw as Record<string, unknown>;
+  const bool = (v: unknown, dflt: boolean) => (typeof v === "boolean" ? v : dflt);
+  const readabilityNum = typeof o.readability === "number" && Number.isFinite(o.readability) ? o.readability : 1;
+  const revisions = Array.isArray(o.revisions)
+    ? o.revisions.filter((r): r is string => typeof r === "string" && r.trim().length > 0).slice(0, 8)
+    : [];
+  return {
+    // Default the health flags to the pessimistic side so a malformed
+    // response is never mistaken for an approval.
+    correct: bool(o.correct, false),
+    clipping: bool(o.clipping, true),
+    collisions: bool(o.collisions, true),
+    readability: Math.min(5, Math.max(1, Math.round(readabilityNum))),
+    summary: typeof o.summary === "string" ? o.summary.slice(0, 300) : "",
+    revisions,
+    needsRevision: bool(o.needsRevision, true),
+  };
+}
+
+export type TerminalState = "approved" | "exhausted_needs_revision" | "unreviewed_after_failure" | "invalid";
+
+/**
+ * Approval is derived IN CODE from the objective critique fields, not from
+ * the model's self-reported `needsRevision` boolean (which models are
+ * unreliable about). Only approved graphs are training-ready.
+ */
+export function isApproved(c: Critique): boolean {
+  return c.correct && !c.clipping && !c.collisions && c.readability >= 4;
+}
+
 /** Gemini structured-output schema for the critique (responseSchema). */
 export const CRITIQUE_SCHEMA = {
   type: "OBJECT",
