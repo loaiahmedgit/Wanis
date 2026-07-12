@@ -69,29 +69,38 @@ simple algebra) need none at all.
 
 When a drawing IS warranted, there are two different tools — pick the right one:
 
-1. LIVE SCENES — for a mathematical function/graph/periodic relationship, or a process/system with clear
-   sequential stages. These are pre-built, professionally animated — you only name one and fill in a few
-   parameters, you never invent the geometry yourself:
+1. LIVE SCENES — for a mathematical function/graph/periodic relationship, a right triangle, or a
+   process/system with clear sequential stages. These are pre-built and professionally drawn — you only
+   name one and fill in a few parameters, you never invent the geometry yourself:
    - "unit-circle-wave" {"function":"sin"|"cos","cycles":1-3} — a point sweeps around a unit circle while
      its height live-draws the sin or cos wave next to it. Use for trigonometry, circular motion, or how a
      periodic wave is generated from rotation.
+   - "right-triangle" {"legLabel1":"...","legLabel2":"...","hypotenuseLabel":"...","angleLabel":"..."
+     (optional)} — a correctly-drawn right triangle with clean, non-overlapping labels, and an angle arc if
+     angleLabel is given. ALWAYS use this for ANY right triangle — never hand-place triangle points as
+     "shapes". Pythagorean theorem: legLabel1 "a", legLabel2 "b", hypotenuseLabel "c". Trig ratios:
+     legLabel1 "opposite", legLabel2 "adjacent", hypotenuseLabel "hypotenuse", angleLabel "theta".
    - "process-flow" {"stages":[{"label":"..."},...] (3-6 stages, each label under 20 characters),
      "connector":"arrow"|"line","layout":"horizontal"|"vertical"} — clean labeled stages connected in
      sequence. Use for a process or system with clear steps: DNA replication, cell division, a circuit, a
      timeline, how something is built or flows.
    A drawing step using a live scene has content that is ONLY: {"scene":"<name>","params":{...}}
 
-2. STATIC SHAPES — for a single spatial/structural figure that isn't a graph or a multi-stage process (a
-   triangle, an atom's layout, a molecule's shape, a simple map). Content is ONLY: {"shapes":[ ... ]}
+2. STATIC SHAPES — for a single spatial/structural figure that has no matching live scene above (an atom's
+   layout, a molecule's shape, a simple map, a non-right-triangle polygon). Content is ONLY:
+   {"shapes":[ ... ]}
    Shape types:
    - "circle" {cx,cy,r}
    - "rect" {x,y,w,h} — x,y is the top-left corner
-   - "polygon" {points:[[x,y],[x,y],[x,y],...]} — any shape with 3+ points: triangles, squares at an angle,
-     custom figures. This is the one to reach for whenever you need an actual geometric shape.
+   - "polygon" {points:[[x,y],[x,y],[x,y],...]} — 3+ points, listed IN ORDER around the shape's perimeter
+     (clockwise or counter-clockwise, but never skipping around) — listing them out of order draws a
+     self-crossing bowtie instead of the shape you meant, and the board will silently discard it.
    - "line" {x1,y1,x2,y2}
    - "arrow" {x1,y1,x2,y2} — draws with an arrowhead at x2,y2; use for motion, flow, or cause -> effect
-   - "label" {x,y,text} — text under 14 characters, placed right next to the shape it names
-   All coordinates are fractions from 0 to 1 (0,0 = top-left, 1,1 = bottom-right). Never pixel values.
+   - "label" {x,y,text} — text under 14 characters, placed right next to the shape it names, with enough
+     clearance that it doesn't sit on top of a line or another label
+   Coordinates are fractions from 0 to 1 — they get auto-centered and scaled to fill the canvas afterward,
+   so don't worry about filling the whole 0-1 range yourself; just get the shape's proportions right.
    Use 3 to 8 shapes — enough to depict the thing, not so many it gets cluttered.
 
 Whichever you use, the "content" string must be ONLY that JSON — no markdown fences, no extra keys, no
@@ -102,17 +111,11 @@ commentary.
   steps already show the working.
 - WRONG: hand-placing a "polygon" of points to fake the shape of a sine wave. Always use the
   "unit-circle-wave" scene for periodic/graph content — never draw a wave as static shapes.
-- RIGHT (static shapes): explaining the Pythagorean theorem — draw the actual right triangle with a square
-  built on each of its three sides, labeled a, b, c:
-  {"shapes":[
-    {"type":"polygon","points":[[0.15,0.75],[0.15,0.25],[0.55,0.75]]},
-    {"type":"polygon","points":[[0.15,0.25],[0.15,0.05],[0.35,0.05],[0.35,0.25]]},
-    {"type":"polygon","points":[[0.15,0.75],[0.15,0.95],[0.55,0.95],[0.55,0.75]]},
-    {"type":"label","x":0.35,"y":0.8,"text":"a"},
-    {"type":"label","x":0.1,"y":0.5,"text":"b"},
-    {"type":"label","x":0.4,"y":0.45,"text":"c"}
-  ]}
-- RIGHT (live scene): "show how sin and cos relate to a circle" — {"scene":"unit-circle-wave","params":
+- WRONG: hand-placing triangle points as "shapes" for the Pythagorean theorem or a trig ratio diagram.
+  Always use the "right-triangle" scene instead — it's drawn correctly every time.
+- RIGHT (live scene): explaining the Pythagorean theorem — {"scene":"right-triangle","params":
+  {"legLabel1":"a","legLabel2":"b","hypotenuseLabel":"c"}}
+- RIGHT (live scene): "show how sin and cos work" — {"scene":"unit-circle-wave","params":
   {"function":"sin","cycles":1}}
 - RIGHT (live scene): explaining DNA replication — {"scene":"process-flow","params":{"stages":
   [{"label":"Helix unwinds"},{"label":"Strands separate"},{"label":"New bases pair"},

@@ -222,6 +222,33 @@
   stroke-width: 1.6;
 }
 
+.scene-triangle-edge {
+  stroke: #b3541e;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+}
+
+.scene-triangle-fill {
+  fill: none;
+  transition: fill 320ms ease-out;
+}
+
+.scene-triangle-fill.is-filled {
+  fill: rgba(179, 84, 30, 0.1);
+}
+
+.scene-triangle-label {
+  opacity: 0;
+  transform: translateY(4px);
+  transform-box: fill-box;
+  transition: opacity 300ms ease-out, transform 300ms ease-out;
+}
+
+.scene-triangle-label.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .scene-projector {
   stroke: #9a9488;
   stroke-width: 1;

@@ -21,6 +21,62 @@ type Primitive =
   | { kind: "polygon"; points: string }
   | { kind: "text"; x: number; y: number; text: string };
 
+const FIT_MARGIN = 0.12;
+
+/**
+ * The LLM's normalized (0-1) coordinates almost never span the full canvas —
+ * it'll pick a diagram confined to one corner, leaving the rest of the
+ * canvas empty ("cramped" is the direct symptom). Rescale + recenter every
+ * drawing's own bounding box to consistently fill the canvas with a fixed
+ * margin, regardless of what coordinate range the LLM happened to use.
+ */
+function autoFitShapes(shapes: Shape[]): Shape[] {
+  let minX = Infinity;
+  let minY = Infinity;
+  let maxX = -Infinity;
+  let maxY = -Infinity;
+  const consider = (x: number, y: number) => {
+    minX = Math.min(minX, x);
+    maxX = Math.max(maxX, x);
+    minY = Math.min(minY, y);
+    maxY = Math.max(maxY, y);
+  };
+  for (const s of shapes) {
+    if (s.type === "circle") {
+      consider(s.cx - s.r, s.cy - s.r);
+      consider(s.cx + s.r, s.cy + s.r);
+    } else if (s.type === "rect") {
+      consider(s.x, s.y);
+      consider(s.x + s.w, s.y + s.h);
+    } else if (s.type === "line" || s.type === "arrow") {
+      consider(s.x1, s.y1);
+      consider(s.x2, s.y2);
+    } else if (s.type === "label") {
+      consider(s.x, s.y);
+    } else if (s.type === "polygon") {
+      for (const [x, y] of s.points) consider(x, y);
+    }
+  }
+  if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return shapes;
+
+  const available = 1 - FIT_MARGIN * 2;
+  const scale = Math.min(available / (maxX - minX), available / (maxY - minY), 3);
+  const offsetX = 0.5 - ((minX + maxX) / 2) * scale;
+  const offsetY = 0.5 - ((minY + maxY) / 2) * scale;
+  const tx = (x: number) => x * scale + offsetX;
+  const ty = (y: number) => y * scale + offsetY;
+
+  return shapes.map((s): Shape => {
+    if (s.type === "circle") return { ...s, cx: tx(s.cx), cy: ty(s.cy), r: s.r * scale };
+    if (s.type === "rect") return { ...s, x: tx(s.x), y: ty(s.y), w: s.w * scale, h: s.h * scale };
+    if (s.type === "line" || s.type === "arrow") {
+      return { ...s, x1: tx(s.x1), y1: ty(s.y1), x2: tx(s.x2), y2: ty(s.y2) };
+    }
+    if (s.type === "label") return { ...s, x: tx(s.x), y: ty(s.y) };
+    return { ...s, points: s.points.map(([x, y]) => [tx(x), ty(y)] as [number, number]) };
+  });
+}
+
 function buildPrimitives(shapes: Shape[]): Primitive[] {
   const out: Primitive[] = [];
   for (const s of shapes) {
@@ -61,7 +117,7 @@ export function Drawing({ step, isWriting }: DrawingProps) {
   const gradientId = useId();
   const content = useMemo(() => parseDrawingContent(step.content), [step.content]);
   const primitives = useMemo(
-    () => (content?.mode === "shapes" ? buildPrimitives(content.shapes) : []),
+    () => (content?.mode === "shapes" ? buildPrimitives(autoFitShapes(content.shapes)) : []),
     [content],
   );
 

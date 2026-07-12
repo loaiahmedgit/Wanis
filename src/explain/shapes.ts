@@ -44,6 +44,40 @@ export interface DrawingSpec {
 
 const isNum = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
 
+function cross(o: [number, number], a: [number, number], b: [number, number]): number {
+  return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+}
+
+function segmentsIntersect(a1: [number, number], a2: [number, number], b1: [number, number], b2: [number, number]): boolean {
+  const d1 = cross(b1, b2, a1);
+  const d2 = cross(b1, b2, a2);
+  const d3 = cross(a1, a2, b1);
+  const d4 = cross(a1, a2, b2);
+  return (d1 > 0 !== d2 > 0) && (d3 > 0 !== d4 > 0);
+}
+
+/**
+ * Small LLMs frequently pick polygon corner points in the wrong winding
+ * order, which silently renders as a self-crossing "bowtie" shape instead
+ * of the simple polygon they meant — a triangle can't do this (3 points
+ * can't cross), but anything with 4+ points can and regularly does. Reject
+ * rather than render garbage geometry.
+ */
+function isSelfIntersecting(points: [number, number][]): boolean {
+  const n = points.length;
+  if (n < 4) return false;
+  for (let i = 0; i < n; i++) {
+    const a1 = points[i];
+    const a2 = points[(i + 1) % n];
+    for (let j = i + 1; j < n; j++) {
+      const sharesVertex = j === i || j === (i + 1) % n || (j + 1) % n === i;
+      if (sharesVertex) continue;
+      if (segmentsIntersect(a1, a2, points[j], points[(j + 1) % n])) return true;
+    }
+  }
+  return false;
+}
+
 /** Parses & loosely validates a "drawing" step's JSON content. Returns null on any failure. */
 export function parseDrawingSpec(content: string): DrawingSpec | null {
   try {
@@ -67,7 +101,9 @@ export function parseDrawingSpec(content: string): DrawingSpec | null {
         const points = (s.points as unknown[])
           .filter((p): p is [number, number] => Array.isArray(p) && isNum(p[0]) && isNum(p[1]))
           .map((p) => [p[0], p[1]] as [number, number]);
-        if (points.length >= 3) shapes.push({ type: "polygon", points });
+        if (points.length >= 3 && !isSelfIntersecting(points)) {
+          shapes.push({ type: "polygon", points });
+        }
       }
     }
     return shapes.length ? { shapes } : null;

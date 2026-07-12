@@ -1,6 +1,7 @@
 import type { ComponentType } from "react";
 import { UnitCircleWave, type UnitCircleWaveParams } from "../components/scenes/UnitCircleWave";
 import { ProcessFlow, type ProcessFlowParams } from "../components/scenes/ProcessFlow";
+import { RightTriangle, type RightTriangleParams } from "../components/scenes/RightTriangle";
 
 export interface SceneComponentProps<P> {
   params: P;
@@ -65,9 +66,30 @@ const processFlowTemplate: SceneTemplate<ProcessFlowParams> = {
     "with clear steps: DNA replication, cell division, a circuit, a timeline, how something is built or flows.",
 };
 
+const rightTriangleTemplate: SceneTemplate<RightTriangleParams> = {
+  name: "right-triangle",
+  component: RightTriangle,
+  validateParams: (raw) => {
+    const str = (v: unknown, fallback: string) => (typeof v === "string" && v.trim() ? v.slice(0, 14) : fallback);
+    const legLabel1 = str(raw.legLabel1, "a");
+    const legLabel2 = str(raw.legLabel2, "b");
+    const hypotenuseLabel = str(raw.hypotenuseLabel, "c");
+    const angleLabel = typeof raw.angleLabel === "string" && raw.angleLabel.trim() ? raw.angleLabel.slice(0, 6) : undefined;
+    return { legLabel1, legLabel2, hypotenuseLabel, angleLabel };
+  },
+  durationMs: (params) => (params.angleLabel ? 2600 : 2200),
+  promptHint:
+    '"right-triangle" {"legLabel1":"...","legLabel2":"...","hypotenuseLabel":"...","angleLabel":"..." (optional)} ' +
+    "— a correctly-drawn right triangle with clean, non-overlapping labels on each side, and an angle arc " +
+    "if angleLabel is given. Always use this instead of freehand \"shapes\" for ANY right triangle — the " +
+    "Pythagorean theorem (legLabel1: \"a\", legLabel2: \"b\", hypotenuseLabel: \"c\"), or trig ratios " +
+    "(legLabel1: \"opposite\", legLabel2: \"adjacent\", hypotenuseLabel: \"hypotenuse\", angleLabel: \"θ\").",
+};
+
 export const SCENE_TEMPLATES: Record<string, SceneTemplate<any>> = {
   "unit-circle-wave": unitCircleWaveTemplate,
   "process-flow": processFlowTemplate,
+  "right-triangle": rightTriangleTemplate,
 };
 
 export function getSceneTemplate(name: string): SceneTemplate<any> | undefined {
