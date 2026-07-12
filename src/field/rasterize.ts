@@ -1,18 +1,29 @@
 export interface TextRegion {
   /** Row (in grid units, 0 = top) where this text's vertical center sits. */
   rowCenter: number;
-  /** Height of the text in grid rows — controls font size. */
+  /** Height of the text in grid rows — controls the starting font size. */
   rowHeight: number;
   bold?: boolean;
 }
 
 const SUPERSAMPLE = 3;
+const MAX_WIDTH_FRACTION = 0.92; // leave a small margin on each side
+const MIN_FONT_PX = 8;
+
+function fontString(px: number, bold: boolean | undefined): string {
+  return `${bold ? "700" : "500"} ${px}px "Space Grotesk", "Segoe UI", system-ui, sans-serif`;
+}
 
 /**
  * Rasterizes a line of text into a full-grid-sized intensity array (0..1),
  * everything outside the text is 0. Renders at a supersampled resolution
  * first and downscales, so letterforms stay smooth even though the final
  * grid is coarse.
+ *
+ * Font size starts from the row height but is measured and shrunk to fit
+ * the available width — AI-generated lines vary in length even when asked
+ * to stay short, and a fixed size that ignores actual string width just
+ * overflows the canvas and clips into unreadable fragments.
  */
 export function rasterizeText(
   text: string,
@@ -22,6 +33,7 @@ export function rasterizeText(
 ): Float32Array {
   const ssW = gridWidth * SUPERSAMPLE;
   const ssH = gridHeight * SUPERSAMPLE;
+  const maxTextWidth = ssW * MAX_WIDTH_FRACTION;
 
   const canvas = document.createElement("canvas");
   canvas.width = ssW;
@@ -29,12 +41,19 @@ export function rasterizeText(
   const ctx = canvas.getContext("2d");
   if (!ctx) throw new Error("2D canvas context unavailable");
 
-  const fontPx = region.rowHeight * SUPERSAMPLE;
+  let fontPx = region.rowHeight * SUPERSAMPLE;
+  ctx.font = fontString(fontPx, region.bold);
+  const measuredWidth = ctx.measureText(text).width;
+
+  if (measuredWidth > maxTextWidth) {
+    fontPx = Math.max(MIN_FONT_PX, fontPx * (maxTextWidth / measuredWidth));
+    ctx.font = fontString(fontPx, region.bold);
+  }
+
   ctx.fillStyle = "#ffffff";
-  ctx.font = `${region.bold ? "700" : "500"} ${fontPx}px "Space Grotesk", "Segoe UI", system-ui, sans-serif`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText(text, ssW / 2, region.rowCenter * SUPERSAMPLE);
+  ctx.fillText(text, ssW / 2, region.rowCenter * SUPERSAMPLE, maxTextWidth);
 
   const small = document.createElement("canvas");
   small.width = gridWidth;

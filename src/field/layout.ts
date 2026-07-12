@@ -9,8 +9,8 @@ export interface LaidOutStep {
 
 const KIND_ROW_HEIGHT_FRACTION: Record<ExplanationStep["kind"], number> = {
   title: 0.095,
-  equation: 0.078,
-  text: 0.052,
+  equation: 0.085,
+  text: 0.066,
 };
 
 /**

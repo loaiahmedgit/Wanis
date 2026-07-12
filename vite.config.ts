@@ -31,10 +31,13 @@ of 3 to 7 board lines that walk through the explanation step by step, the way a 
 real board while talking.
 
 Rules for each line's "content":
-- Keep it SHORT: under 40 characters, ideally under 30. It must fit on one line with no wrapping.
+- Keep it SHORT. This is drawn as one physical line on a small pin board, not read as text — a line
+  that's too long gets shrunk until it's illegible. Hard limits: "title" under 26 characters,
+  "equation" under 22 characters, "text" under 28 characters. When in doubt, cut words, don't shrink.
 - kind "title": a short heading for what's being explained (e.g. "Solve for x").
-- kind "equation": a literal mathematical expression or formula, nothing else.
-- kind "text": a short plain-language sentence fragment describing one step or fact.
+- kind "equation": a literal mathematical expression or formula, nothing else, no words mixed in.
+- kind "text": a short plain-language sentence fragment describing one step or fact — a fragment, not
+  a full sentence, if that's what it takes to stay under the limit (e.g. "Subtract 7 from both sides").
 - Order matters: this is the exact sequence the board will draw in.
 - Do not include markdown, LaTeX syntax, or explanations of your own reasoning — only the board content itself.`;
 
