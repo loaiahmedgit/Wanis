@@ -69,9 +69,10 @@ export function PinField({ steps, gridWidth, gridHeight, planToken }: PinFieldPr
 
   const geometry = useMemo(() => new THREE.CapsuleGeometry(PIN_RADIUS, PIN_LENGTH, 1, 5), []);
 
-  // One-time (or grid-change) full pass so every pin has a valid resting
-  // matrix before the active-set loop starts only touching a subset.
-  useEffect(() => {
+  /** Snaps every pin back to its flat resting matrix and clears all
+   * animation state — used both on first mount and whenever a new plan
+   * starts, so pins lit up by a previous prompt don't stay stuck on screen. */
+  function resetBoard() {
     const mesh = meshRef.current;
     if (!mesh) return;
     current.current.fill(0);
@@ -79,6 +80,8 @@ export function PinField({ steps, gridWidth, gridHeight, planToken }: PinFieldPr
     boardTarget.current.fill(0);
     flickerUntil.current.fill(0);
     activeSet.current.clear();
+    revealedSteps.current = 0;
+    nextRevealAt.current = 0;
 
     for (let i = 0; i < count; i++) {
       const x = positions[i * 2];
@@ -92,19 +95,15 @@ export function PinField({ steps, gridWidth, gridHeight, planToken }: PinFieldPr
     mesh.instanceMatrix.needsUpdate = true;
     if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
     initializedGeometry.current = true;
-  }, [positions, count]);
+  }
 
-  // New plan (or reset): start revealing steps from the beginning again.
+  // One-time (or grid-change) full pass so every pin has a valid resting
+  // matrix before the active-set loop starts only touching a subset.
+  useEffect(resetBoard, [positions, count]);
+
+  // New plan: previously-lit pins must snap back to flat, not stay stuck.
   useEffect(() => {
-    revealedSteps.current = 0;
-    nextRevealAt.current = 0;
-    boardTarget.current.fill(0);
-    // Every pin that was on needs to animate back down; simplest correct
-    // approach for a full reset is to let the one-time-pass effect above
-    // (which also runs on grid/position identity change) handle geometry —
-    // here we just need velocities zeroed so a fresh reveal starts clean.
-    velocity.current.fill(0);
-    activeSet.current.clear();
+    if (initializedGeometry.current) resetBoard();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [planToken]);
 
