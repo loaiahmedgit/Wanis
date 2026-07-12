@@ -51,7 +51,9 @@
   stroke-width: 1.6;
   stroke-linejoin: round;
   stroke-linecap: round;
-  transition: stroke-dashoffset var(--draw-duration, 900ms) linear, fill 260ms ease-out 60ms;
+  transition-property: stroke-dashoffset, fill;
+  transition-timing-function: linear, ease-out;
+  transition-delay: 0ms, 40ms;
 }
 
 .line-glyphs.phase-inked {
