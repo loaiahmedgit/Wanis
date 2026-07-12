@@ -51,9 +51,9 @@
   stroke-width: 1.6;
   stroke-linejoin: round;
   stroke-linecap: round;
-  transition-property: stroke-dashoffset, fill;
-  transition-timing-function: linear, ease-out;
-  transition-delay: 0ms, 40ms;
+  /* stroke-dashoffset is driven per-frame by JS (see Line.tsx) — only the
+     ink fill-in after a glyph finishes gets a CSS transition. */
+  transition: fill 220ms ease-out 40ms;
 }
 
 .line-glyphs.phase-inked {
@@ -64,12 +64,9 @@
 
 .pen-icon {
   position: absolute;
-  top: 50%;
+  top: 0;
   left: 0;
-  transform-origin: 20% 80%;
   font-size: 1.15em;
-  transition-property: transform;
-  transition-timing-function: linear;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.25));
 }
 

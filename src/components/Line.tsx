@@ -15,12 +15,6 @@ const SIZE_BY_KIND: Record<ExplanationStep["kind"], { size: number; weight: Hand
   equation: { size: 30, weight: "bold" },
 };
 
-interface Glyph {
-  d: string;
-  x1: number;
-  x2: number;
-}
-
 type GlyphPhase = "idle" | "drawing" | "inked";
 
 export function Line({ step, isWriting }: LineProps) {
@@ -29,73 +23,85 @@ export function Line({ step, isWriting }: LineProps) {
   const baseline = size * 1.2;
   const height = Math.ceil(size * 1.7);
 
-  // One real <path> per glyph (not one combined <text>/path for the whole
-  // line) — that's what lets each letter finish drawing before the next
-  // one starts, à la Vivus's oneByOne, instead of everything growing at
-  // once along a single shared dash offset.
-  const glyphs: Glyph[] = font
-    ? font.getPaths(step.content, 2, baseline, size).map((p) => {
-        const box = p.getBoundingBox();
-        return { d: p.toPathData(2), x1: box.x1, x2: box.x2 };
-      })
-    : [];
-  const width = glyphs.length ? Math.max(16, Math.ceil(Math.max(...glyphs.map((g) => g.x2))) + 6) : 16;
+  // One real <path> per glyph, so each letter's own outline can be sampled
+  // point-by-point as it draws — the pen follows the actual stroke geometry
+  // (up, down, curves), not just a left-to-right slide.
+  const glyphs = font ? font.getPaths(step.content, 2, baseline, size).map((p) => p.toPathData(2)) : [];
+  const fullBox = font ? font.getPath(step.content, 2, baseline, size).getBoundingBox() : null;
+  const width = fullBox ? Math.max(16, Math.ceil(fullBox.x2) + 6) : 16;
 
   const pathRefs = useRef<(SVGPathElement | null)[]>([]);
   const [lengths, setLengths] = useState<number[] | null>(null);
   const [revealedCount, setRevealedCount] = useState(isWriting ? 0 : glyphs.length);
-  const [activePhase, setActivePhase] = useState<GlyphPhase>("idle");
+  const [phases, setPhases] = useState<GlyphPhase[]>(() => glyphs.map(() => (isWriting ? "idle" : "inked")));
+  const [penPos, setPenPos] = useState<{ x: number; y: number } | null>(null);
 
   useLayoutEffect(() => {
     pathRefs.current = pathRefs.current.slice(0, glyphs.length);
     setLengths(glyphs.map((_, i) => pathRefs.current[i]?.getTotalLength() ?? 0));
+    setPhases(glyphs.map(() => (isWriting ? "idle" : "inked")));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step.content]);
 
   const totalDuration = lineDurationMs(step.content);
   const totalLength = lengths ? lengths.reduce((a, b) => a + b, 0) : 0;
   // Split the line's total draw time across glyphs proportional to each
-  // glyph's own stroke length, so drawing speed reads as constant — same
-  // rule Vivus's oneByOne uses.
+  // glyph's own stroke length, so drawing speed reads as constant.
   const durations =
     lengths && totalLength > 0
-      ? lengths.map((len) => Math.max(40, (len / totalLength) * totalDuration))
-      : glyphs.map(() => 60);
+      ? lengths.map((len) => Math.max(60, (len / totalLength) * totalDuration))
+      : glyphs.map(() => 80);
 
   useEffect(() => {
     if (!isWriting || !lengths) return;
     if (revealedCount >= glyphs.length) return;
 
     const len = lengths[revealedCount] ?? 0;
-    if (len <= 0.5) {
-      // Nothing to trace (space, etc.) — skip straight to the next glyph.
+    const pathEl = pathRefs.current[revealedCount];
+    if (len <= 0.5 || !pathEl) {
       setRevealedCount((c) => c + 1);
       return;
     }
 
-    setActivePhase("idle");
-    const raf = requestAnimationFrame(() => setActivePhase("drawing"));
-    const dur = durations[revealedCount] ?? 60;
-    const timer = setTimeout(() => {
-      setActivePhase("inked");
-      setRevealedCount((c) => c + 1);
-    }, dur + 30);
+    setPhases((prev) => {
+      const next = [...prev];
+      next[revealedCount] = "drawing";
+      return next;
+    });
 
-    return () => {
-      cancelAnimationFrame(raf);
-      clearTimeout(timer);
-    };
+    const duration = durations[revealedCount] ?? 80;
+    const start = performance.now();
+    let raf = 0;
+
+    function tick(now: number) {
+      const t = Math.min(1, (now - start) / duration);
+      pathEl!.style.strokeDashoffset = String(len * (1 - t));
+      const point = pathEl!.getPointAtLength(len * t);
+      setPenPos({ x: point.x, y: point.y });
+
+      if (t < 1) {
+        raf = requestAnimationFrame(tick);
+      } else {
+        setPhases((prev) => {
+          const next = [...prev];
+          next[revealedCount] = "inked";
+          return next;
+        });
+        setRevealedCount((c) => c + 1);
+      }
+    }
+    raf = requestAnimationFrame(tick);
+
+    return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isWriting, lengths, revealedCount, glyphs.length]);
-
-  const activeGlyph = glyphs[revealedCount];
 
   return (
     <div className={`line line-${step.kind}`}>
       <div className="line-canvas" style={{ width, height }}>
         <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
-          {glyphs.map((g, i) => {
-            const phase: GlyphPhase = i < revealedCount ? "inked" : i === revealedCount ? activePhase : "idle";
+          {glyphs.map((d, i) => {
+            const phase = phases[i] ?? "idle";
             const len = lengths?.[i] || 1;
             return (
               <path
@@ -103,28 +109,25 @@ export function Line({ step, isWriting }: LineProps) {
                 ref={(el) => {
                   pathRefs.current[i] = el;
                 }}
-                d={g.d}
+                d={d}
                 className={`line-glyphs phase-${phase}`}
                 style={
                   {
                     strokeDasharray: len,
-                    strokeDashoffset: phase === "idle" ? len : 0,
-                    transitionDuration:
-                      phase === "drawing" ? `${durations[i] ?? 60}ms, 220ms` : "0ms, 220ms",
+                    // "drawing" is driven imperatively per-frame in the effect above —
+                    // leave it alone here so React doesn't fight the rAF loop.
+                    strokeDashoffset: phase === "idle" ? len : phase === "inked" ? 0 : undefined,
                   } as React.CSSProperties
                 }
               />
             );
           })}
         </svg>
-        {isWriting && activeGlyph && (
+        {isWriting && penPos && revealedCount < glyphs.length && (
           <span
             className="pen-icon"
             aria-hidden="true"
-            style={{
-              transform: `translateX(${activePhase === "idle" ? activeGlyph.x1 : activeGlyph.x2}px) translateY(-50%) rotate(-14deg)`,
-              transitionDuration: activePhase === "drawing" ? `${durations[revealedCount] ?? 60}ms` : "0ms",
-            }}
+            style={{ transform: `translate(${penPos.x}px, ${penPos.y}px) translate(-15%, -80%) rotate(-14deg)` }}
           >
             ✏️
           </span>
