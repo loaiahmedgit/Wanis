@@ -341,6 +341,54 @@
   animation: callout-in 320ms ease-out forwards;
 }
 
+/* Visual-program (compiled scene-graph) stroke registers. Shares the crisp
+   scene language, keyed by semantic role the compiler assigns per stroke. */
+.stroke-player {
+  position: relative;
+}
+.vp-stroke {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.vp-primary {
+  stroke: #b3541e;
+  stroke-width: 2.4;
+}
+.vp-outline {
+  stroke: #b3541e;
+  stroke-width: 2;
+}
+.vp-axis {
+  stroke: #9a9488;
+  stroke-width: 1.2;
+}
+.vp-projector {
+  stroke: #9a9488;
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  opacity: 0.7;
+}
+.vp-dot {
+  fill: #b3541e;
+  stroke: #b3541e;
+  filter: drop-shadow(0 0 4px rgba(179, 84, 30, 0.55));
+}
+.vp-text {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 600;
+  font-size: 14px;
+  fill: #5a5a66;
+  opacity: 0;
+  animation: callout-in 300ms ease-out forwards;
+}
+.vp-label {
+  fill: #5a5a66;
+}
+.vp-pen {
+  animation: none;
+}
+
 .scene-bb-grid-dot {
   fill: #c9beac;
   opacity: 0.5;

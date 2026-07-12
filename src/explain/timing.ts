@@ -1,6 +1,7 @@
 import type { ExplanationStep } from "./types";
 import { parseDrawingContent } from "./drawingSpec";
 import { getSceneTemplate } from "./sceneTemplates";
+import type { StrokeProgram } from "../visual/strokeProgram";
 
 /**
  * How long a single text/equation line takes to "write" itself out. Paced
@@ -30,11 +31,18 @@ export function sceneDurationMs(scene: string, params: Record<string, unknown>):
   return template.durationMs(validated);
 }
 
+/** How long a compiled scene-graph program takes to draw, from its stroke count. */
+export function graphDurationMs(program: StrokeProgram): number {
+  const strokes = program.groups.reduce((n, g) => n + g.strokes.length, 0);
+  return Math.min(11000, Math.max(2600, 1200 + strokes * 420));
+}
+
 export function stepDurationMs(step: ExplanationStep): number {
   if (step.kind === "drawing") {
     const content = parseDrawingContent(step.content);
     if (!content) return drawingDurationMs(1);
     if (content.mode === "scene") return sceneDurationMs(content.scene, content.params);
+    if (content.mode === "graph") return graphDurationMs(content.program);
     return drawingDurationMs(content.shapes.length);
   }
   return lineDurationMs(step.content);

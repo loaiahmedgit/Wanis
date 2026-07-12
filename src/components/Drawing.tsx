@@ -3,7 +3,8 @@ import type { ExplanationStep } from "../explain/types";
 import type { Shape } from "../explain/shapes";
 import { parseDrawingContent } from "../explain/drawingSpec";
 import { getSceneTemplate } from "../explain/sceneTemplates";
-import { drawingDurationMs, easeOutCubic, sceneDurationMs } from "../explain/timing";
+import { drawingDurationMs, easeOutCubic, sceneDurationMs, graphDurationMs } from "../explain/timing";
+import { StrokePlayer } from "./StrokePlayer";
 
 interface DrawingProps {
   step: ExplanationStep;
@@ -228,6 +229,16 @@ export function Drawing({ step, isWriting }: DrawingProps) {
       <div className="drawing">
         <div className="scene-canvas">
           <Scene params={content.params} isWriting={isWriting} durationMs={duration} />
+        </div>
+      </div>
+    );
+  }
+
+  if (content.mode === "graph") {
+    return (
+      <div className="drawing">
+        <div className="scene-canvas">
+          <StrokePlayer program={content.program} isWriting={isWriting} durationMs={graphDurationMs(content.program)} />
         </div>
       </div>
     );

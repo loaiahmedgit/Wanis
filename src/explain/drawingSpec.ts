@@ -1,5 +1,8 @@
 import { parseDrawingSpec, type Shape } from "./shapes";
 import { getSceneTemplate } from "./sceneTemplates";
+import { parseSceneGraph, type SceneGraph } from "../visual/sceneGraph";
+import { compileSceneGraph } from "../visual/compiler";
+import type { StrokeProgram } from "../visual/strokeProgram";
 
 export interface ShapesSpec {
   mode: "shapes";
@@ -12,7 +15,13 @@ export interface SceneSpec {
   params: Record<string, unknown>;
 }
 
-export type DrawingContent = ShapesSpec | SceneSpec;
+export interface GraphSpec {
+  mode: "graph";
+  graph: SceneGraph;
+  program: StrokeProgram;
+}
+
+export type DrawingContent = ShapesSpec | SceneSpec | GraphSpec;
 
 /**
  * A "drawing" step's content is one of two things: the existing static
@@ -44,6 +53,14 @@ export function parseDrawingContent(content: string): DrawingContent | null {
     const validated = template.validateParams(rawParams);
     if (!validated) return null;
     return { mode: "scene", scene: obj.scene, params: validated as Record<string, unknown> };
+  }
+
+  if (obj.sceneGraph && typeof obj.sceneGraph === "object") {
+    const graph = parseSceneGraph(obj.sceneGraph);
+    if (!graph) return null;
+    const program = compileSceneGraph(graph);
+    if (!program) return null;
+    return { mode: "graph", graph, program };
   }
 
   if (Array.isArray(obj.shapes)) {
