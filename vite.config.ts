@@ -111,6 +111,13 @@ When a drawing IS warranted, there are three tools — pick in this priority ord
      horizontally across to another (e.g. a circle point's height onto a graph).
    - {"id":"...","type":"arrowBetween","from":"<id>","to":"<id>","label":"..."} — an arrow between two
      objects; use for flow, cause->effect, movement, relationships.
+   - {"id":"...","type":"cycle","members":["<id>","<id>",...],"direction":"clockwise"|"counterclockwise",
+     "label":"..."} — a CYCLE. Declare the member boxes/circles separately, then list their ids IN ORDER
+     here. The engine arranges them evenly on a ring and draws the looping arrows for you (including the
+     closing last->first), so it reads as a real loop, not a row. Use this for ANY cyclic process — the
+     water cycle, rock cycle, carbon/nitrogen cycle, a life cycle, the seasons. Do NOT add your own
+     arrowBetween arrows between cycle members (the cycle draws them) and do NOT constrain cycle members
+     (the ring positions them). The optional "label" is shown in the middle of the ring.
    - {"id":"...","type":"label","text":"...","near":"<id>","placement":"above"|"below"|"left"|"right"} —
      a text label placed cleanly next to another object (placement optional, default below).
    - {"id":"...","type":"freeSketch","meaning":"...","strokes":["M .. C .. Z", ...]} — the ESCAPE HATCH,
@@ -166,6 +173,10 @@ commentary.
 - RIGHT (scene graph): the structure of an atom — {"sceneGraph":{"objects":[{"id":"shell","type":
   "circleShape","label":"electron shell","size":2.3},{"id":"nucleus","type":"circleShape","label":
   "nucleus","size":0.7}],"constraints":[["alignedX","nucleus","shell"],["alignedY","nucleus","shell"]]}}
+- RIGHT (scene graph, CYCLE): the water cycle — {"sceneGraph":{"objects":[{"id":"evap","type":"box",
+  "label":"Evaporation"},{"id":"cond","type":"box","label":"Condensation"},{"id":"precip","type":"box",
+  "label":"Precipitation"},{"id":"collect","type":"box","label":"Collection"},{"id":"cyc","type":"cycle",
+  "members":["evap","cond","precip","collect"],"direction":"clockwise"}],"constraints":[]}}
 
 STEP KINDS
 - "title": a short heading for what's being explained (e.g. "Solve for x"). Under 30 characters.

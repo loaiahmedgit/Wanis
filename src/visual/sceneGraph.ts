@@ -80,6 +80,21 @@ export interface FreeSketchObject {
   strokes: string[];
 }
 
+/**
+ * A cyclic process: the model lists the ordered member ids (each a declared
+ * box/circleShape) and a direction; the compiler arranges them evenly on a
+ * ring and routes the connecting arrows (including the closing last->first),
+ * so the diagram reads as an actual loop instead of a cramped row. The model
+ * never supplies coordinates or arrow geometry.
+ */
+export interface CycleObject {
+  id: string;
+  type: "cycle";
+  members: string[];
+  direction: "clockwise" | "counterclockwise";
+  label?: string;
+}
+
 export type SceneObject =
   | BoxObject
   | CircleObject
@@ -89,7 +104,8 @@ export type SceneObject =
   | ProjectionObject
   | ArrowObject
   | LabelObject
-  | FreeSketchObject;
+  | FreeSketchObject
+  | CycleObject;
 
 export type ConstraintKind = "rightOf" | "leftOf" | "above" | "below" | "alignedY" | "alignedX";
 export type Constraint = [ConstraintKind, string, string];
@@ -182,6 +198,18 @@ export function parseSceneGraph(raw: unknown): SceneGraph | null {
         .filter((p): p is string => typeof p === "string" && isSafeFreeSketchPath(p))
         .slice(0, 12);
       if (strokes.length) objects.push({ id, type: "freeSketch", meaning: s.meaning.slice(0, 40), strokes });
+    } else if (s.type === "cycle" && Array.isArray(s.members)) {
+      const members = (s.members as unknown[]).filter(isStr).slice(0, 8);
+      const direction = s.direction === "counterclockwise" ? "counterclockwise" : "clockwise";
+      if (members.length >= 2) {
+        objects.push({
+          id,
+          type: "cycle",
+          members,
+          direction,
+          label: isStr(s.label) ? s.label.slice(0, 24) : undefined,
+        });
+      }
     } else {
       continue;
     }
@@ -200,14 +228,30 @@ export function parseSceneGraph(raw: unknown): SceneGraph | null {
     }
   }
 
+  // A member is "placeable" if it's a box/circleShape/unitCircle/waveGraph —
+  // the types the ring can actually position. (Kept in sync with compiler
+  // SIZES; freeSketch excluded so a cycle can't try to ring-arrange a sketch.)
+  const RING_MEMBER_TYPES = new Set(["box", "circleShape", "unitCircle", "waveGraph"]);
+  const placeableIds = new Set(objects.filter((o) => RING_MEMBER_TYPES.has(o.type)).map((o) => o.id));
+
   // Drop reference objects whose targets don't exist rather than failing whole graph.
-  const valid = objects.filter((o) => {
-    if (o.type === "pointOnCircle") return ids.has(o.on);
-    if (o.type === "projection") return ids.has(o.from) && ids.has(o.to);
-    if (o.type === "arrowBetween") return ids.has(o.from) && ids.has(o.to);
-    if (o.type === "label") return ids.has(o.near);
-    return true;
-  });
+  const valid = objects
+    .map((o) => {
+      if (o.type === "cycle") {
+        // Keep only members that exist AND are ring-placeable, in order.
+        const members = o.members.filter((m) => placeableIds.has(m));
+        return members.length >= 2 ? { ...o, members } : null;
+      }
+      return o;
+    })
+    .filter((o): o is SceneObject => o !== null)
+    .filter((o) => {
+      if (o.type === "pointOnCircle") return ids.has(o.on);
+      if (o.type === "projection") return ids.has(o.from) && ids.has(o.to);
+      if (o.type === "arrowBetween") return ids.has(o.from) && ids.has(o.to);
+      if (o.type === "label") return ids.has(o.near);
+      return true;
+    });
   if (!valid.length) return null;
 
   return { objects: valid, constraints };

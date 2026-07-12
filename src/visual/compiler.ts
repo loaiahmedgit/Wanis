@@ -87,6 +87,36 @@ function layout(graph: SceneGraph): Map<string, Box> {
   graph.constraints.forEach(apply);
   graph.constraints.forEach(apply);
 
+  // Cycles override their members' positions onto a ring — applied AFTER
+  // constraints so the loop layout always wins (constraints on cycle members
+  // are effectively superseded, which is what we want). Each cycle rings
+  // around its own center, offset so multiple cycles / other content don't
+  // stack on top of each other.
+  let cycleOffsetX = 0;
+  for (const o of graph.objects) {
+    if (o.type !== "cycle") continue;
+    const members = o.members.map((id) => boxes.get(id)).filter((b): b is Box => !!b);
+    const n = members.length;
+    if (n < 2) continue;
+    const maxDim = Math.max(...members.map((b) => Math.max(b.w, b.h)));
+    // Radius large enough that adjacent ring nodes don't touch.
+    const minR = (maxDim + GAP + 30) / (2 * Math.sin(Math.PI / n));
+    const R = Math.max(150, minR);
+    const cx = cycleOffsetX + R + maxDim;
+    const cy = R + maxDim;
+    for (let i = 0; i < n; i++) {
+      // Start at top (-90deg); clockwise = increasing angle in SVG's y-down space.
+      const dir = o.direction === "counterclockwise" ? -1 : 1;
+      const ang = -Math.PI / 2 + dir * i * ((Math.PI * 2) / n);
+      const px = cx + R * Math.cos(ang);
+      const py = cy + R * Math.sin(ang);
+      const b = members[i];
+      b.x = px - b.w / 2;
+      b.y = py - b.h / 2;
+    }
+    cycleOffsetX = cx + R + maxDim + GAP * 2;
+  }
+
   return boxes;
 }
 
@@ -102,6 +132,16 @@ function roundedRectPath(b: Box, rad: number): string {
     `L ${x + w} ${y + h - r} Q ${x + w} ${y + h} ${x + w - r} ${y + h} ` +
     `L ${x + r} ${y + h} Q ${x} ${y + h} ${x} ${y + h - r} ` +
     `L ${x} ${y + r} Q ${x} ${y} ${x + r} ${y} Z`
+  );
+}
+
+/** Two short strokes forming an arrowhead at `tip`, pointing along `angle`. */
+function arrowHeadPath(tipX: number, tipY: number, angle: number, len = 11): string {
+  const a1 = angle + Math.PI * 0.82;
+  const a2 = angle - Math.PI * 0.82;
+  return (
+    `M ${tipX} ${tipY} L ${tipX + len * Math.cos(a1)} ${tipY + len * Math.sin(a1)} ` +
+    `M ${tipX} ${tipY} L ${tipX + len * Math.cos(a2)} ${tipY + len * Math.sin(a2)}`
   );
 }
 
@@ -141,7 +181,44 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
     const texts: TextItem[] = [];
     const box = boxes.get(o.id);
 
-    if (o.type === "box" && box) {
+    if (o.type === "cycle") {
+      // The member boxes are emitted by their own object entries; the cycle
+      // emits only the connecting arrows (consecutive, closing last->first)
+      // and an optional center label. Arrows bow slightly outward from the
+      // ring center so they read as an arc, not a chord across the middle.
+      const memberBoxes = o.members.map((id) => boxes.get(id)).filter((b): b is Box => !!b);
+      const n = memberBoxes.length;
+      if (n >= 2) {
+        let sumX = 0;
+        let sumY = 0;
+        for (const b of memberBoxes) {
+          const c = center(b);
+          sumX += c.x;
+          sumY += c.y;
+        }
+        const ringC = { x: sumX / n, y: sumY / n };
+        for (let i = 0; i < n; i++) {
+          const from = memberBoxes[i];
+          const to = memberBoxes[(i + 1) % n];
+          const cf = center(from);
+          const ct = center(to);
+          const p1 = anchorOnBoxEdge(from, ct);
+          const p2 = anchorOnBoxEdge(to, cf);
+          // Control point: midpoint pushed outward from the ring center.
+          const mx = (p1.x + p2.x) / 2;
+          const my = (p1.y + p2.y) / 2;
+          const ox = mx - ringC.x;
+          const oy = my - ringC.y;
+          const olen = Math.hypot(ox, oy) || 1;
+          const bow = 26;
+          const ctrl = { x: mx + (ox / olen) * bow, y: my + (oy / olen) * bow };
+          strokes.push({ d: `M ${p1.x} ${p1.y} Q ${ctrl.x} ${ctrl.y} ${p2.x} ${p2.y}`, css: "vp-primary" });
+          const headAngle = Math.atan2(p2.y - ctrl.y, p2.x - ctrl.x);
+          strokes.push({ d: arrowHeadPath(p2.x, p2.y, headAngle), css: "vp-primary" });
+        }
+        if (o.label) texts.push({ x: ringC.x, y: ringC.y, text: o.label, css: "vp-label", anchor: "middle" });
+      }
+    } else if (o.type === "box" && box) {
       strokes.push({ d: roundedRectPath(box, 10), css: "vp-outline" });
       if (o.label) {
         const c = center(box);
