@@ -127,7 +127,10 @@ async function callGemini(modelId: string, apiKey: string, prompt: string): Prom
   if (!res.ok) {
     const errText = await res.text();
     console.error("Gemini API error:", res.status, errText);
-    throw new Error("Gemini API request failed");
+    if (res.status === 429) {
+      throw new Error(`Gemini free-tier quota hit for ${modelId} — try a different model or wait for it to reset`);
+    }
+    throw new Error(`Gemini API request failed (${res.status})`);
   }
 
   const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
@@ -154,7 +157,10 @@ async function callGroq(modelId: string, apiKey: string, prompt: string): Promis
   if (!res.ok) {
     const errText = await res.text();
     console.error("Groq API error:", res.status, errText);
-    throw new Error("Groq API request failed");
+    if (res.status === 429) {
+      throw new Error(`Groq rate limit hit for ${modelId} — try a different model or wait a moment`);
+    }
+    throw new Error(`Groq API request failed (${res.status})`);
   }
 
   const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
@@ -215,7 +221,7 @@ export default defineConfig(({ mode }) => {
               sendJson(res, 200, { prompt, steps });
             } catch (err) {
               console.error("explain-api error:", err);
-              sendJson(res, 502, { error: "Explanation request failed" });
+              sendJson(res, 502, { error: err instanceof Error ? err.message : "Explanation request failed" });
             }
           });
         },

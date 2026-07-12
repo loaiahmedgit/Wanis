@@ -10,4 +10,8 @@ export interface ExplanationStep {
 export interface ExplanationPlan {
   prompt: string;
   steps: ExplanationStep[];
+  /** True when the real AI call failed and this is the hardcoded fallback plan. */
+  isFallback?: boolean;
+  /** Why the fallback was used, if it was — shown to the user, not hidden. */
+  fallbackReason?: string;
 }

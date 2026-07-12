@@ -24,10 +24,12 @@ export async function getExplanationPlan(prompt: string, model: string): Promise
       body: JSON.stringify({ prompt, model }),
     });
 
-    if (!res.ok) throw new Error(`explain API returned ${res.status}`);
+    const data = (await res.json().catch(() => null)) as ApiResponse | null;
 
-    const data = (await res.json()) as ApiResponse;
-    if (!Array.isArray(data.steps) || data.steps.length === 0) {
+    if (!res.ok) {
+      throw new Error(data?.error || `explain API returned ${res.status}`);
+    }
+    if (!data || !Array.isArray(data.steps) || data.steps.length === 0) {
       throw new Error("explain API returned no steps");
     }
 
@@ -39,9 +41,9 @@ export async function getExplanationPlan(prompt: string, model: string): Promise
 
     return { prompt, steps };
   } catch (err) {
-    console.warn(
-      `Perception Field: real explanation call failed (${String(err)}). Falling back to a hardcoded example.`,
-    );
-    return findExamplePlan(prompt) ?? EXAMPLE_PLANS[0];
+    const reason = err instanceof Error ? err.message : String(err);
+    console.warn(`Perception Field: real explanation call failed (${reason}). Falling back to a hardcoded example.`);
+    const fallback = findExamplePlan(prompt) ?? EXAMPLE_PLANS[0];
+    return { ...fallback, isFallback: true, fallbackReason: reason };
   }
 }

@@ -24,6 +24,19 @@
   overflow-y: auto;
 }
 
+.fallback-banner {
+  max-width: 720px;
+  margin: 0 auto 24px;
+  padding: 10px 14px;
+  background: rgba(179, 84, 30, 0.1);
+  border: 1px solid rgba(179, 84, 30, 0.3);
+  border-radius: 8px;
+  color: #8a3f16;
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
 .board {
   display: flex;
   flex-direction: column;

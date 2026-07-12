@@ -38,6 +38,11 @@ export default function App() {
   return (
     <div className="app-root">
       <div className="board-wrap">
+        {plan?.isFallback && (
+          <p className="fallback-banner">
+            Couldn't reach the AI ({plan.fallbackReason}) — showing an offline example instead.
+          </p>
+        )}
         {plan && fontsReady ? (
           <Board steps={plan.steps} planToken={planToken} />
         ) : (
