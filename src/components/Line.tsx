@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ExplanationStep } from "../explain/types";
 import { lineDurationMs } from "../explain/timing";
 import { getHandFont, type HandWeight } from "../explain/handFonts";
@@ -24,24 +24,41 @@ export function Line({ step, isWriting }: LineProps) {
   const height = Math.ceil(size * 1.7);
 
   // One real <path> per glyph, so each letter's own outline can be sampled
-  // point-by-point as it draws — the pen follows the actual stroke geometry
-  // (up, down, curves), not just a left-to-right slide.
-  const glyphs = font ? font.getPaths(step.content, 2, baseline, size).map((p) => p.toPathData(2)) : [];
-  const fullBox = font ? font.getPath(step.content, 2, baseline, size).getBoundingBox() : null;
-  const width = fullBox ? Math.max(16, Math.ceil(fullBox.x2) + 6) : 16;
+  // point-by-point as it draws. Memoized — opentype.js's outline generation
+  // is real work and this must not re-run on every animation frame.
+  const glyphs = useMemo(
+    () => (font ? font.getPaths(step.content, 2, baseline, size).map((p) => p.toPathData(2)) : []),
+    [font, step.content, baseline, size],
+  );
+  const width = useMemo(() => {
+    if (!font) return 16;
+    const box = font.getPath(step.content, 2, baseline, size).getBoundingBox();
+    return Math.max(16, Math.ceil(box.x2) + 6);
+  }, [font, step.content, baseline, size]);
 
-  const pathRefs = useRef<(SVGPathElement | null)[]>([]);
+  const svgRef = useRef<SVGSVGElement>(null);
+  // Real DOM path elements, looked up once via the DOM rather than per-glyph
+  // callback refs (which re-attach on every render) — and stroke-dashoffset
+  // is written to them directly, never through React's style prop, so
+  // React's reconciler never "corrects" a value it doesn't know we set.
+  const pathElsRef = useRef<SVGPathElement[]>([]);
   const [lengths, setLengths] = useState<number[] | null>(null);
   const [revealedCount, setRevealedCount] = useState(isWriting ? 0 : glyphs.length);
   const [phases, setPhases] = useState<GlyphPhase[]>(() => glyphs.map(() => (isWriting ? "idle" : "inked")));
   const [penPos, setPenPos] = useState<{ x: number; y: number } | null>(null);
 
   useLayoutEffect(() => {
-    pathRefs.current = pathRefs.current.slice(0, glyphs.length);
-    setLengths(glyphs.map((_, i) => pathRefs.current[i]?.getTotalLength() ?? 0));
-    setPhases(glyphs.map(() => (isWriting ? "idle" : "inked")));
+    const svg = svgRef.current;
+    pathElsRef.current = svg ? Array.from(svg.querySelectorAll<SVGPathElement>(".line-glyphs")) : [];
+    const measured = pathElsRef.current.map((el) => el.getTotalLength());
+    setLengths(measured);
+    const initialPhases: GlyphPhase[] = glyphs.map(() => (isWriting ? "idle" : "inked"));
+    setPhases(initialPhases);
+    pathElsRef.current.forEach((el, i) => {
+      el.style.strokeDashoffset = initialPhases[i] === "inked" ? "0" : String(measured[i] || 0);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step.content]);
+  }, [glyphs]);
 
   const totalDuration = lineDurationMs(step.content);
   const totalLength = lengths ? lengths.reduce((a, b) => a + b, 0) : 0;
@@ -57,7 +74,7 @@ export function Line({ step, isWriting }: LineProps) {
     if (revealedCount >= glyphs.length) return;
 
     const len = lengths[revealedCount] ?? 0;
-    const pathEl = pathRefs.current[revealedCount];
+    const pathEl = pathElsRef.current[revealedCount];
     if (len <= 0.5 || !pathEl) {
       setRevealedCount((c) => c + 1);
       return;
@@ -82,6 +99,7 @@ export function Line({ step, isWriting }: LineProps) {
       if (t < 1) {
         raf = requestAnimationFrame(tick);
       } else {
+        pathEl!.style.strokeDashoffset = "0";
         setPhases((prev) => {
           const next = [...prev];
           next[revealedCount] = "inked";
@@ -99,26 +117,16 @@ export function Line({ step, isWriting }: LineProps) {
   return (
     <div className={`line line-${step.kind}`}>
       <div className="line-canvas" style={{ width, height }}>
-        <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+        <svg ref={svgRef} width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
           {glyphs.map((d, i) => {
             const phase = phases[i] ?? "idle";
             const len = lengths?.[i] || 1;
             return (
               <path
                 key={i}
-                ref={(el) => {
-                  pathRefs.current[i] = el;
-                }}
                 d={d}
                 className={`line-glyphs phase-${phase}`}
-                style={
-                  {
-                    strokeDasharray: len,
-                    // "drawing" is driven imperatively per-frame in the effect above —
-                    // leave it alone here so React doesn't fight the rAF loop.
-                    strokeDashoffset: phase === "idle" ? len : phase === "inked" ? 0 : undefined,
-                  } as React.CSSProperties
-                }
+                style={{ strokeDasharray: len } as React.CSSProperties}
               />
             );
           })}
