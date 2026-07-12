@@ -204,10 +204,15 @@
   overflow: hidden;
   width: 100%;
   height: auto;
-  /* Compiled scene graphs have variable aspect ratios; a tall one (a
-     vertical loop, stacked parts) would otherwise render enormous and
-     overflow the card. Cap the rendered height — preserveAspectRatio=meet
-     scales the whole scene down to fit and letterboxes it. */
+}
+
+/* Only compiled scene graphs (StrokePlayer) get the height cap — their
+   aspect ratios are variable, so a tall one (a vertical loop, stacked
+   parts) would otherwise render enormous and overflow the card.
+   preserveAspectRatio=meet scales the whole scene down to fit. Hand-built
+   flagship scenes have fixed, intentional viewBoxes and must NOT be capped
+   (that would shrink DNA, Big Bang, etc. below their designed size). */
+.stroke-player > svg {
   max-height: 60vh;
   margin: 0 auto;
 }

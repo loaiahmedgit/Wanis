@@ -126,7 +126,11 @@ When a drawing IS warranted, there are three tools — pick in this priority ord
    - ["alignedX","a","b"] — a shares b's horizontal center (stack them; use both alignedX+alignedY for
      concentric/centered-on-top).
    Rules: every referenced id ("on","from","to","near","idA","idB") must be an id you actually declared.
-   Use ~3-8 objects. Add constraints so the layout reads clearly; unconstrained objects flow left-to-right.
+   IMPORTANT: constraints only position the "solid" objects — box, circleShape, unitCircle, waveGraph, and
+   freeSketch. A constraint whose idA is a label, arrow, point, or projection is IGNORED (those objects are
+   placed automatically next to whatever they attach to). So constrain the boxes/circles/graphs, and let
+   labels/arrows/points follow. Use ~3-8 objects. Add constraints so the layout reads clearly; unconstrained
+   solid objects flow left-to-right.
 
 3. STATIC SHAPES — a legacy fallback, rarely needed now that the scene graph exists. Only use it if you
    genuinely need a raw freeform polygon the scene graph (including freeSketch) can't express. Content is

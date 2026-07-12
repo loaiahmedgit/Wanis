@@ -106,13 +106,26 @@ const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(mi
 const CONSTRAINT_KINDS: ConstraintKind[] = ["rightOf", "leftOf", "above", "below", "alignedY", "alignedX"];
 
 /**
- * Path data allowed inside a freeSketch: M/L/C/Q/Z + numbers only
- * (IntroSVG-style command restriction). Arcs are deliberately excluded —
- * the compiler rescales freeSketch coordinates assuming strictly
- * alternating x/y numbers, and arc syntax (rx ry rotation flags x y)
- * breaks that assumption.
+ * Path data allowed inside a freeSketch: UPPERCASE (absolute) M/L/C/Q/Z
+ * commands + numbers only. Lowercase (relative) commands are rejected —
+ * the compiler rescales coordinates as if they were absolute positions in
+ * the sketch's 0-1 box, so a relative command would land somewhere
+ * unintended. Arcs are excluded too (their rx/ry/rotation/flag syntax
+ * doesn't alternate x/y). Every coordinate must fall inside [0, 1], or the
+ * stroke could escape its allocated box once scaled — the whole point of
+ * the sandbox is that freeSketch never controls global layout.
  */
-const SAFE_PATH = /^[MLCQZmlcqz0-9\s,.-]+$/;
+const SAFE_PATH_CHARS = /^[MLCQZ0-9\s,.-]+$/;
+
+function isSafeFreeSketchPath(d: string): boolean {
+  if (!SAFE_PATH_CHARS.test(d) || d.length >= 2000) return false;
+  // Every numeric coordinate must be within the 0-1 sandbox box.
+  for (const m of d.matchAll(/-?\d*\.?\d+/g)) {
+    const n = parseFloat(m[0]);
+    if (!Number.isFinite(n) || n < 0 || n > 1) return false;
+  }
+  return true;
+}
 
 /**
  * Parses + validates a raw LLM-supplied scene graph. Same contract as every
@@ -166,7 +179,7 @@ export function parseSceneGraph(raw: unknown): SceneGraph | null {
       objects.push({ id, type: "label", text: s.text.slice(0, 28), near: s.near, placement });
     } else if (s.type === "freeSketch" && isStr(s.meaning) && Array.isArray(s.strokes)) {
       const strokes = (s.strokes as unknown[])
-        .filter((p): p is string => typeof p === "string" && SAFE_PATH.test(p) && p.length < 2000)
+        .filter((p): p is string => typeof p === "string" && isSafeFreeSketchPath(p))
         .slice(0, 12);
       if (strokes.length) objects.push({ id, type: "freeSketch", meaning: s.meaning.slice(0, 40), strokes });
     } else {

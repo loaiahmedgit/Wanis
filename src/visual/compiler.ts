@@ -39,6 +39,21 @@ function center(b: Box): { x: number; y: number } {
   return { x: b.x + b.w / 2, y: b.y + b.h / 2 };
 }
 
+const CHAR_W = 8; // rough advance per character at the ~14px label size
+/**
+ * Anchor-aware text bounds — the single source of truth for both label
+ * de-collision and viewBox framing. The x position is the anchor point, so
+ * the horizontal span depends on whether the text is start/middle/end
+ * anchored; using a fixed ±40 (as an earlier version did) both missed
+ * collisions and clipped long side-labels off the edge of the frame.
+ */
+function textBounds(t: TextItem): { l: number; r: number; t: number; b: number } {
+  const w = Math.max(CHAR_W, t.text.length * CHAR_W);
+  const anchor = t.anchor ?? "middle";
+  const l = anchor === "start" ? t.x : anchor === "end" ? t.x - w : t.x - w / 2;
+  return { l, r: l + w, t: t.y - 13, b: t.y + 4 };
+}
+
 /** Ordered layout pass: seed placeables left-to-right, then apply constraints in order. */
 function layout(graph: SceneGraph): Map<string, Box> {
   const boxes = new Map<string, Box>();
@@ -266,13 +281,9 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   // label crossing a node label), which the layout can't foresee. Nudge
   // overlapping text items apart vertically so none stack on each other.
   const allTexts = groups.flatMap((g) => g.texts);
-  const textBox = (t: TextItem) => {
-    const half = (t.text.length * 8) / 2;
-    return { l: t.x - half, r: t.x + half, t: t.y - 13, b: t.y + 4 };
-  };
   const overlaps = (a: TextItem, b: TextItem) => {
-    const ba = textBox(a);
-    const bb = textBox(b);
+    const ba = textBounds(a);
+    const bb = textBounds(b);
     return ba.l < bb.r && ba.r > bb.l && ba.t < bb.b && ba.b > bb.t;
   };
   // Process in reading order (top-to-bottom); push any colliding later text down.
@@ -282,7 +293,7 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
       let moved = false;
       for (let j = 0; j < i; j++) {
         if (overlaps(allTexts[i], allTexts[j])) {
-          allTexts[i].y = textBox(allTexts[j]).b + 15;
+          allTexts[i].y = textBounds(allTexts[j]).b + 15;
           moved = true;
         }
       }
@@ -316,8 +327,9 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   }
   for (const g of groups) {
     for (const t of g.texts) {
-      considerPoint(t.x - 40, t.y - 16);
-      considerPoint(t.x + 40, t.y + 8);
+      const tb = textBounds(t);
+      considerPoint(tb.l, tb.t);
+      considerPoint(tb.r, tb.b);
     }
   }
   if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return null;
