@@ -1,7 +1,7 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ExplanationStep } from "../explain/types";
 import { parseDrawingSpec, type Shape } from "../explain/shapes";
-import { drawingDurationMs } from "../explain/timing";
+import { drawingDurationMs, easeOutCubic } from "../explain/timing";
 
 interface DrawingProps {
   step: ExplanationStep;
@@ -56,6 +56,7 @@ function buildPrimitives(shapes: Shape[]): Primitive[] {
 type Phase = "idle" | "drawing" | "inked";
 
 export function Drawing({ step, isWriting }: DrawingProps) {
+  const gradientId = useId();
   const spec = useMemo(() => parseDrawingSpec(step.content), [step.content]);
   const primitives = useMemo(() => (spec ? buildPrimitives(spec.shapes) : []), [spec]);
 
@@ -133,8 +134,9 @@ export function Drawing({ step, isWriting }: DrawingProps) {
 
     function tick(now: number) {
       const t = Math.min(1, (now - start) / duration);
-      el!.style.strokeDashoffset = String(len * (1 - t));
-      const point = (el as SVGGeometryElement).getPointAtLength(len * t);
+      const eased = easeOutCubic(t);
+      el!.style.strokeDashoffset = String(len * (1 - eased));
+      const point = (el as SVGGeometryElement).getPointAtLength(len * eased);
       setPenPos({ x: point.x, y: point.y });
 
       if (t < 1) {
@@ -156,24 +158,35 @@ export function Drawing({ step, isWriting }: DrawingProps) {
 
   if (!primitives.length) return null;
 
+  const fillId = `${gradientId}-fill`;
+
   return (
     <div className="drawing">
       <div className="drawing-canvas">
         <svg ref={svgRef} width={VIEW_W} height={VIEW_H} viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}>
+          <defs>
+            <radialGradient id={fillId} cx="35%" cy="30%" r="75%">
+              <stop offset="0%" stopColor="rgba(230, 150, 90, 0.32)" />
+              <stop offset="100%" stopColor="rgba(179, 84, 30, 0.12)" />
+            </radialGradient>
+          </defs>
           {primitives.map((p, i) => {
             const phase = phases[i] ?? "idle";
             const cls = `shape-el phase-${phase}`;
+            const inkedStyle = phase === "inked" ? { fill: `url(#${fillId})` } : undefined;
             if (p.kind === "circle") {
-              return <circle key={i} cx={p.cx} cy={p.cy} r={p.r} className={cls} />;
+              return <circle key={i} cx={p.cx} cy={p.cy} r={p.r} className={cls} style={inkedStyle} />;
             }
             if (p.kind === "rect") {
-              return <rect key={i} x={p.x} y={p.y} width={p.width} height={p.height} className={cls} />;
+              return (
+                <rect key={i} x={p.x} y={p.y} width={p.width} height={p.height} className={cls} style={inkedStyle} />
+              );
             }
             if (p.kind === "line") {
               return <line key={i} x1={p.x1} y1={p.y1} x2={p.x2} y2={p.y2} className={cls} />;
             }
             if (p.kind === "polygon") {
-              return <polygon key={i} points={p.points} className={cls} />;
+              return <polygon key={i} points={p.points} className={cls} style={inkedStyle} />;
             }
             return (
               <text key={i} x={p.x} y={p.y} className={`shape-label phase-${phase}`}>

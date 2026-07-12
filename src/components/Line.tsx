@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ExplanationStep } from "../explain/types";
-import { lineDurationMs } from "../explain/timing";
+import { lineDurationMs, easeOutCubic } from "../explain/timing";
 import { getHandFont, type HandWeight } from "../explain/handFonts";
 import { layoutGlyphs } from "../explain/glyphLayout";
 
@@ -90,8 +90,9 @@ export function Line({ step, isWriting }: LineProps) {
 
     function tick(now: number) {
       const t = Math.min(1, (now - start) / duration);
-      pathEl!.style.strokeDashoffset = String(len * (1 - t));
-      const point = pathEl!.getPointAtLength(len * t);
+      const eased = easeOutCubic(t);
+      pathEl!.style.strokeDashoffset = String(len * (1 - eased));
+      const point = pathEl!.getPointAtLength(len * eased);
       setPenPos({ x: point.x, y: point.y });
 
       if (t < 1) {

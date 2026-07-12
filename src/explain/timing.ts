@@ -25,3 +25,12 @@ export function stepDurationMs(step: ExplanationStep): number {
   }
   return lineDurationMs(step.content);
 }
+
+/**
+ * A real hand doesn't move at constant speed — it starts a stroke quickly
+ * and settles into the curve. Used to shape the per-frame progress value
+ * driving stroke-dashoffset, instead of raw linear time.
+ */
+export function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
+}

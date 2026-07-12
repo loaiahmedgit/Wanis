@@ -64,6 +64,8 @@
   stroke-width: 1.6;
   stroke-linejoin: round;
   stroke-linecap: round;
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
   /* stroke-dashoffset is driven per-frame by JS (see Line.tsx) — only the
      ink fill-in after a glyph finishes gets a CSS transition. */
   transition: fill 220ms ease-out 40ms;
@@ -73,14 +75,41 @@
   fill: var(--ink-color, #1c1c1c);
   stroke: var(--ink-color, #1c1c1c);
   stroke-width: 0;
+  animation: ink-settle 480ms ease-out;
+}
+
+@keyframes ink-settle {
+  0% {
+    filter: drop-shadow(0 0 0 rgba(179, 84, 30, 0));
+    transform: scale(1);
+  }
+  32% {
+    filter: drop-shadow(0 0 5px rgba(179, 84, 30, 0.5));
+    transform: scale(1.03);
+  }
+  100% {
+    filter: drop-shadow(0 0 0 rgba(179, 84, 30, 0));
+    transform: scale(1);
+  }
 }
 
 .pen-icon {
   position: absolute;
   top: 0;
   left: 0;
-  font-size: 1.15em;
-  filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.25));
+  font-size: 1.2em;
+  filter: drop-shadow(0 3px 4px rgba(28, 28, 28, 0.3));
+  animation: pen-bob 480ms ease-in-out infinite;
+}
+
+@keyframes pen-bob {
+  0%,
+  100% {
+    filter: drop-shadow(0 3px 4px rgba(28, 28, 28, 0.3));
+  }
+  50% {
+    filter: drop-shadow(0 5px 7px rgba(28, 28, 28, 0.22));
+  }
 }
 
 .line-title .line-glyphs {
@@ -100,11 +129,17 @@
 
 .drawing {
   display: flex;
+  padding: 4px 0;
 }
 
 .drawing-canvas {
   position: relative;
   overflow: visible;
+  padding: 18px 22px;
+  background: linear-gradient(155deg, rgba(255, 255, 255, 0.55), rgba(255, 255, 255, 0.15));
+  border: 1px solid rgba(28, 28, 28, 0.08);
+  border-radius: 16px;
+  box-shadow: 0 18px 40px -28px rgba(28, 28, 28, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.6);
 }
 
 .drawing-canvas svg {
@@ -115,19 +150,22 @@
 .shape-el {
   fill: none;
   stroke: #b3541e;
-  stroke-width: 2;
+  stroke-width: 2.4;
   stroke-linecap: round;
   stroke-linejoin: round;
-  transition: fill 220ms ease-out 40ms;
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
+  transition: fill 260ms ease-out 40ms;
 }
 
 .shape-el.phase-inked {
-  fill: rgba(179, 84, 30, 0.12);
+  animation: ink-settle 520ms ease-out;
 }
 
 .shape-label {
   font-family: "Kalam", cursive;
-  font-size: 12px;
+  font-weight: 700;
+  font-size: 13px;
   fill: #5a5a66;
   opacity: 0;
   transform: translateY(4px);
@@ -143,11 +181,10 @@
 @media (prefers-reduced-motion: reduce) {
   .line-glyphs,
   .shape-el,
-  .shape-label {
-    transition-duration: 1ms !important;
-  }
+  .shape-label,
   .pen-icon {
     transition-duration: 1ms !important;
+    animation-duration: 1ms !important;
   }
 }
 
