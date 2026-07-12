@@ -14,6 +14,10 @@ dist-ssr
 .env
 .env.*
 
+# Generated critique-loop artifacts (screenshots + JSON) — future training
+# data, kept locally, not committed (would bloat the repo with binaries).
+training-data/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
