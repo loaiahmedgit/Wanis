@@ -341,6 +341,26 @@
   animation: callout-in 320ms ease-out forwards;
 }
 
+.scene-bb-grid-dot {
+  fill: #c9beac;
+  opacity: 0.5;
+}
+
+.scene-bb-particle {
+  filter: drop-shadow(0 0 3px rgba(179, 84, 30, 0.35));
+  animation: bb-pulse 1400ms ease-in-out infinite;
+}
+
+@keyframes bb-pulse {
+  0%,
+  100% {
+    opacity: 0.92;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 /* A one-shot "look here" pulse — shared by every scene for a single-beat
    highlight (a base pair, a forming galaxy, the circle/wave peak moment). */
 .scene-focus-ring {
@@ -393,7 +413,10 @@
   .shape-label,
   .pen-icon,
   .scene-node,
-  .scene-connector {
+  .scene-connector,
+  .scene-triangle-label,
+  .scene-sequence-letter,
+  .scene-bb-particle {
     transition-duration: 1ms !important;
     animation-duration: 1ms !important;
   }

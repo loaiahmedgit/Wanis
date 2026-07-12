@@ -3,6 +3,7 @@ import { UnitCircleWave, type UnitCircleWaveParams } from "../components/scenes/
 import { ProcessFlow, type ProcessFlowParams } from "../components/scenes/ProcessFlow";
 import { RightTriangle, type RightTriangleParams } from "../components/scenes/RightTriangle";
 import { DnaHelix, type DnaHelixParams } from "../components/scenes/DnaHelix";
+import { BigBang, type BigBangParams } from "../components/scenes/BigBang";
 
 export interface SceneComponentProps<P> {
   params: P;
@@ -99,11 +100,24 @@ const dnaHelixTemplate: SceneTemplate<DnaHelixParams> = {
     "(the copying process) use \"process-flow\" instead — this scene is about structure, not the copying steps.",
 };
 
+const bigBangTemplate: SceneTemplate<BigBangParams> = {
+  name: "big-bang",
+  component: BigBang,
+  validateParams: () => ({}) as BigBangParams,
+  durationMs: () => 6200,
+  promptHint:
+    '"big-bang" {} (no params) — a dense cluster at the center, then the SPACE ITSELF stretches (a grid ' +
+    "expanding, not particles flying through static space), matter cooling in color as it spreads, camera " +
+    "pulling back to reveal scale, with a \"galaxies form\" moment. Use for the expansion of the universe / " +
+    "the Big Bang — never as a generic \"explosion\" for unrelated topics.",
+};
+
 export const SCENE_TEMPLATES: Record<string, SceneTemplate<any>> = {
   "unit-circle-wave": unitCircleWaveTemplate,
   "process-flow": processFlowTemplate,
   "right-triangle": rightTriangleTemplate,
   "dna-helix": dnaHelixTemplate,
+  "big-bang": bigBangTemplate,
 };
 
 export function getSceneTemplate(name: string): SceneTemplate<any> | undefined {

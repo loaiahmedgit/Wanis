@@ -87,6 +87,9 @@ When a drawing IS warranted, there are two different tools — pick the right on
    - "dna-helix" {} (no params) — a flat ladder twists into a real double helix, the camera zooms into a
      few base pairs to label them, then pulls back as the pairs peel off into a sequence strip. Use for how
      DNA stores information or its STRUCTURE — not the replication process, that's "process-flow".
+   - "big-bang" {} (no params) — a dense cluster where space itself stretches outward (not particles flying
+     through static space), cooling in color as it expands, camera pulling back to reveal scale. Use ONLY
+     for the actual Big Bang / expansion of the universe, never as a generic "explosion" effect.
    A drawing step using a live scene has content that is ONLY: {"scene":"<name>","params":{...}}
 
 2. STATIC SHAPES — for a single spatial/structural figure that has no matching live scene above (an atom's
