@@ -16,12 +16,12 @@ interface ApiResponse {
  * reason (no key configured, network error, malformed response), so the
  * board always has something to draw rather than breaking outright.
  */
-export async function getExplanationPlan(prompt: string): Promise<ExplanationPlan> {
+export async function getExplanationPlan(prompt: string, model: string): Promise<ExplanationPlan> {
   try {
     const res = await fetch("/api/explain", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt }),
+      body: JSON.stringify({ prompt, model }),
     });
 
     if (!res.ok) throw new Error(`explain API returned ${res.status}`);

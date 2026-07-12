@@ -2,10 +2,23 @@ import { defineConfig, loadEnv, type Connect } from "vite";
 import react from "@vitejs/plugin-react";
 import type { ServerResponse } from "node:http";
 
-// "gemini-2.5-flash" returns 404 for this key ("no longer available to new
-// users" per Gemini's own error) — using the rolling "-latest" alias instead,
-// which is also what the user's own AI Studio quickstart curl example used.
-const GEMINI_MODEL = "gemini-flash-latest";
+// Kept in sync with src/explain/models.ts (which the frontend dropdown reads) —
+// duplicated here because vite.config.ts type-checks under a different
+// tsconfig (node16 module resolution) that can't cleanly import from src/.
+interface ModelOption {
+  id: string;
+  label: string;
+  provider: "gemini" | "groq";
+}
+
+const MODEL_OPTIONS: ModelOption[] = [
+  { id: "gemini-flash-lite-latest", label: "Gemini Flash Lite (fast, free)", provider: "gemini" },
+  { id: "gemini-flash-latest", label: "Gemini Flash", provider: "gemini" },
+  { id: "llama-3.3-70b-versatile", label: "Groq Llama 3.3 70B", provider: "groq" },
+  { id: "llama-3.1-8b-instant", label: "Groq Llama 3.1 8B (fastest)", provider: "groq" },
+];
+
+const DEFAULT_MODEL_ID = MODEL_OPTIONS[0].id;
 
 const EXPLANATION_SCHEMA = {
   type: "OBJECT",
@@ -26,12 +39,12 @@ const EXPLANATION_SCHEMA = {
 };
 
 const SYSTEM_INSTRUCTION = `You are Wanis, an AI tutor whose explanation is drawn, one short line at a time, \
-onto a small pin board — not read as a paragraph. Given a student's question, return an ordered sequence \
+onto a board — not read as a paragraph. Given a student's question, return an ordered sequence \
 of 3 to 7 board lines that walk through the explanation step by step, the way a teacher would write on a \
 real board while talking.
 
 Rules for each line's "content":
-- Keep it SHORT. This is drawn as one physical line on a small pin board, not read as text — a line
+- Keep it SHORT. This is drawn as one physical line on the board, not read as text — a line
   that's too long gets shrunk until it's illegible. Hard limits: "title" under 26 characters,
   "equation" under 22 characters, "text" under 28 characters. When in doubt, cut words, don't shrink.
 - kind "title": a short heading for what's being explained (e.g. "Solve for x").
@@ -41,7 +54,12 @@ Rules for each line's "content":
 - Order matters: this is the exact sequence the board will draw in.
 - Do not include markdown, LaTeX syntax, or explanations of your own reasoning — only the board content itself.`;
 
-/** Reads the whole request body as text. */
+const GROQ_JSON_INSTRUCTION = `${SYSTEM_INSTRUCTION}
+
+Respond with ONLY a JSON object of the exact shape:
+{"steps": [{"kind": "title" | "text" | "equation", "content": string}, ...]}
+No markdown fences, no other keys, no commentary.`;
+
 function readBody(req: Connect.IncomingMessage): Promise<string> {
   return new Promise((resolve, reject) => {
     let data = "";
@@ -57,10 +75,70 @@ function sendJson(res: ServerResponse, status: number, body: unknown) {
   res.end(JSON.stringify(body));
 }
 
+interface StepPayload {
+  kind: string;
+  content: string;
+}
+
+async function callGemini(modelId: string, apiKey: string, prompt: string): Promise<StepPayload[]> {
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
+    body: JSON.stringify({
+      systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
+      contents: [{ parts: [{ text: prompt }] }],
+      generationConfig: {
+        responseMimeType: "application/json",
+        responseSchema: EXPLANATION_SCHEMA,
+      },
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("Gemini API error:", res.status, errText);
+    throw new Error("Gemini API request failed");
+  }
+
+  const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
+  const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) throw new Error("Gemini returned no content");
+  const parsed = JSON.parse(text) as { steps: StepPayload[] };
+  return parsed.steps;
+}
+
+async function callGroq(modelId: string, apiKey: string, prompt: string): Promise<StepPayload[]> {
+  const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
+    body: JSON.stringify({
+      model: modelId,
+      response_format: { type: "json_object" },
+      messages: [
+        { role: "system", content: GROQ_JSON_INSTRUCTION },
+        { role: "user", content: prompt },
+      ],
+    }),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    console.error("Groq API error:", res.status, errText);
+    throw new Error("Groq API request failed");
+  }
+
+  const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
+  const text = json.choices?.[0]?.message?.content;
+  if (!text) throw new Error("Groq returned no content");
+  const parsed = JSON.parse(text) as { steps: StepPayload[] };
+  return parsed.steps;
+}
+
 // https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "");
-  const apiKey = env.GEMINI_API_KEY;
+  const geminiKey = env.GEMINI_API_KEY;
+  const groqKey = env.GROQ_API_KEY;
 
   return {
     plugins: [
@@ -73,59 +151,41 @@ export default defineConfig(({ mode }) => {
               sendJson(res, 405, { error: "POST only" });
               return;
             }
-            if (!apiKey) {
-              sendJson(res, 500, { error: "GEMINI_API_KEY not set in .env" });
-              return;
-            }
 
             try {
               const raw = await readBody(req);
-              const { prompt } = JSON.parse(raw) as { prompt?: string };
+              const { prompt, model } = JSON.parse(raw) as { prompt?: string; model?: string };
               if (!prompt || !prompt.trim()) {
                 sendJson(res, 400, { error: "Missing prompt" });
                 return;
               }
 
-              const geminiRes = await fetch(
-                `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-goog-api-key": apiKey,
-                  },
-                  body: JSON.stringify({
-                    systemInstruction: { parts: [{ text: SYSTEM_INSTRUCTION }] },
-                    contents: [{ parts: [{ text: prompt }] }],
-                    generationConfig: {
-                      responseMimeType: "application/json",
-                      responseSchema: EXPLANATION_SCHEMA,
-                    },
-                  }),
-                },
-              );
-
-              if (!geminiRes.ok) {
-                const errText = await geminiRes.text();
-                console.error("Gemini API error:", geminiRes.status, errText);
-                sendJson(res, 502, { error: "Gemini API request failed" });
+              const modelId = model || DEFAULT_MODEL_ID;
+              const option: ModelOption | undefined = MODEL_OPTIONS.find((m: ModelOption) => m.id === modelId);
+              if (!option) {
+                sendJson(res, 400, { error: `Unknown model "${modelId}"` });
                 return;
               }
 
-              const geminiJson = (await geminiRes.json()) as {
-                candidates?: { content?: { parts?: { text?: string }[] } }[];
-              };
-              const text = geminiJson.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (!text) {
-                sendJson(res, 502, { error: "Gemini returned no content" });
-                return;
+              let steps: StepPayload[];
+              if (option.provider === "gemini") {
+                if (!geminiKey) {
+                  sendJson(res, 500, { error: "GEMINI_API_KEY not set in .env" });
+                  return;
+                }
+                steps = await callGemini(option.id, geminiKey, prompt);
+              } else {
+                if (!groqKey) {
+                  sendJson(res, 500, { error: "GROQ_API_KEY not set in .env" });
+                  return;
+                }
+                steps = await callGroq(option.id, groqKey, prompt);
               }
 
-              const parsed = JSON.parse(text) as { steps: { kind: string; content: string }[] };
-              sendJson(res, 200, { prompt, steps: parsed.steps });
+              sendJson(res, 200, { prompt, steps });
             } catch (err) {
               console.error("explain-api error:", err);
-              sendJson(res, 500, { error: "Internal error generating explanation" });
+              sendJson(res, 502, { error: "Explanation request failed" });
             }
           });
         },

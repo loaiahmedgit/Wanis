@@ -36,52 +36,61 @@
   display: flex;
 }
 
-.line-clip {
+.line-canvas {
   position: relative;
-  overflow: hidden;
-  white-space: nowrap;
-  transition-property: width;
-  transition-timing-function: linear;
+  overflow: visible;
 }
 
-.line-text {
-  display: inline-block;
-  white-space: nowrap;
+.line-canvas svg {
+  display: block;
+  overflow: visible;
+}
+
+.line-glyphs {
+  fill: none;
+  stroke-width: 1.6;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--draw-duration, 900ms) linear, fill 260ms ease-out 60ms;
+}
+
+.line-glyphs.phase-inked {
+  fill: var(--ink-color, #1c1c1c);
+  stroke: var(--ink-color, #1c1c1c);
+  stroke-width: 0;
 }
 
 .pen-icon {
   position: absolute;
   top: 50%;
-  left: 100%;
-  transform: translate(-30%, -60%) rotate(-12deg);
-  font-size: 1.1em;
+  left: 0;
+  transform-origin: 20% 80%;
+  font-size: 1.15em;
+  transition-property: transform;
+  transition-timing-function: linear;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.25));
 }
 
-.line-title .line-text {
-  font-family: "Space Grotesk", sans-serif;
-  font-weight: 700;
-  font-size: clamp(28px, 4vw, 40px);
-  color: #1c1c1c;
-  letter-spacing: -0.01em;
+.line-title .line-glyphs {
+  stroke: #1c1c1c;
+  --ink-color: #1c1c1c;
 }
 
-.line-text {
-  font-family: "Kalam", cursive;
-  font-weight: 400;
-  font-size: clamp(20px, 2.6vw, 26px);
-  color: #2b2b2b;
+.line-text .line-glyphs {
+  stroke: #2b2b2b;
+  --ink-color: #2b2b2b;
 }
 
-.line-equation .line-text {
-  font-family: "Kalam", cursive;
-  font-weight: 700;
-  font-size: clamp(22px, 3vw, 30px);
-  color: #b3541e;
+.line-equation .line-glyphs {
+  stroke: #b3541e;
+  --ink-color: #b3541e;
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .line-clip {
+  .line-glyphs {
+    transition-duration: 1ms !important;
+  }
+  .pen-icon {
     transition-duration: 1ms !important;
   }
 }
@@ -101,6 +110,18 @@
   padding: 8px 8px 8px 18px;
   box-shadow: 0 24px 50px -24px rgba(28, 28, 28, 0.3);
 }
+.model-picker {
+  font-family: "Space Grotesk", sans-serif;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #5a5a66;
+  background: #f4f1ea;
+  border: 1px solid rgba(28, 28, 28, 0.1);
+  border-radius: 8px;
+  padding: 0 8px;
+  max-width: 130px;
+}
+
 .prompt-bar input {
   flex: 1;
   background: transparent;
