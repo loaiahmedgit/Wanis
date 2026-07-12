@@ -316,6 +316,31 @@
   fill: #b3541e;
 }
 
+.scene-helix-backbone {
+  stroke: #8a7a68;
+  stroke-width: 2.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.scene-rung {
+  stroke: #c9beac;
+  stroke-width: 2;
+}
+
+.scene-codon-tint {
+  fill: rgba(179, 84, 30, 0.07);
+  rx: 6;
+}
+
+.scene-sequence-letter {
+  font-family: "Space Grotesk", sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  opacity: 0;
+  animation: callout-in 320ms ease-out forwards;
+}
+
 /* A one-shot "look here" pulse — shared by every scene for a single-beat
    highlight (a base pair, a forming galaxy, the circle/wave peak moment). */
 .scene-focus-ring {

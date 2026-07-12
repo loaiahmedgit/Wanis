@@ -82,8 +82,11 @@ When a drawing IS warranted, there are two different tools — pick the right on
      legLabel1 "opposite", legLabel2 "adjacent", hypotenuseLabel "hypotenuse", angleLabel "theta".
    - "process-flow" {"stages":[{"label":"..."},...] (3-6 stages, each label under 20 characters),
      "connector":"arrow"|"line","layout":"horizontal"|"vertical"} — clean labeled stages connected in
-     sequence. Use for a process or system with clear steps: DNA replication, cell division, a circuit, a
-     timeline, how something is built or flows.
+     sequence. Use for a PROCESS with clear steps: DNA replication (the copying), cell division, a circuit,
+     a timeline, how something is built or flows.
+   - "dna-helix" {} (no params) — a flat ladder twists into a real double helix, the camera zooms into a
+     few base pairs to label them, then pulls back as the pairs peel off into a sequence strip. Use for how
+     DNA stores information or its STRUCTURE — not the replication process, that's "process-flow".
    A drawing step using a live scene has content that is ONLY: {"scene":"<name>","params":{...}}
 
 2. STATIC SHAPES — for a single spatial/structural figure that has no matching live scene above (an atom's
@@ -117,9 +120,11 @@ commentary.
   {"legLabel1":"a","legLabel2":"b","hypotenuseLabel":"c"}}
 - RIGHT (live scene): "show how sin and cos work" — {"scene":"unit-circle-wave","params":
   {"function":"sin","cycles":1}}
-- RIGHT (live scene): explaining DNA replication — {"scene":"process-flow","params":{"stages":
-  [{"label":"Helix unwinds"},{"label":"Strands separate"},{"label":"New bases pair"},
+- RIGHT (live scene): explaining DNA replication (the copying process) — {"scene":"process-flow","params":
+  {"stages":[{"label":"Helix unwinds"},{"label":"Strands separate"},{"label":"New bases pair"},
   {"label":"Two new strands"}],"connector":"arrow","layout":"horizontal"}}
+- RIGHT (live scene): explaining how DNA stores information (structure, not replication) —
+  {"scene":"dna-helix","params":{}}
 
 STEP KINDS
 - "title": a short heading for what's being explained (e.g. "Solve for x"). Under 30 characters.

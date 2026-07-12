@@ -2,6 +2,7 @@ import type { ComponentType } from "react";
 import { UnitCircleWave, type UnitCircleWaveParams } from "../components/scenes/UnitCircleWave";
 import { ProcessFlow, type ProcessFlowParams } from "../components/scenes/ProcessFlow";
 import { RightTriangle, type RightTriangleParams } from "../components/scenes/RightTriangle";
+import { DnaHelix, type DnaHelixParams } from "../components/scenes/DnaHelix";
 
 export interface SceneComponentProps<P> {
   params: P;
@@ -86,10 +87,23 @@ const rightTriangleTemplate: SceneTemplate<RightTriangleParams> = {
     "(legLabel1: \"opposite\", legLabel2: \"adjacent\", hypotenuseLabel: \"hypotenuse\", angleLabel: \"θ\").",
 };
 
+const dnaHelixTemplate: SceneTemplate<DnaHelixParams> = {
+  name: "dna-helix",
+  component: DnaHelix,
+  validateParams: () => ({}) as DnaHelixParams,
+  durationMs: () => 9800,
+  promptHint:
+    '"dna-helix" {} (no params) — a flat ladder twists into a real double helix, the camera zooms into a ' +
+    "few base pairs to label them (A-T, C-G, color-coded), then zooms back out as the pairs peel off into " +
+    "a glowing sequence strip. Use for how DNA stores information or its structure. For DNA REPLICATION " +
+    "(the copying process) use \"process-flow\" instead — this scene is about structure, not the copying steps.",
+};
+
 export const SCENE_TEMPLATES: Record<string, SceneTemplate<any>> = {
   "unit-circle-wave": unitCircleWaveTemplate,
   "process-flow": processFlowTemplate,
   "right-triangle": rightTriangleTemplate,
+  "dna-helix": dnaHelixTemplate,
 };
 
 export function getSceneTemplate(name: string): SceneTemplate<any> | undefined {
