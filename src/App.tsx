@@ -1,42 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
-import { Scene } from "./components/Scene";
-import { DebugPanel } from "./components/DebugPanel";
-import { Toolbar } from "./components/Toolbar";
+import { useEffect, useState } from "react";
+import { Board } from "./components/Board";
 import { getExplanationPlan } from "./explain/getExplanationPlan";
 import { DEFAULT_PROMPT } from "./explain/examples";
-import { layoutPlan } from "./field/layout";
 import type { ExplanationPlan } from "./explain/types";
-import { useFieldStore } from "./state/store";
 import "./App.css";
 
 export default function App() {
-  const gridWidth = useFieldStore((s) => s.gridWidth);
-  const gridHeight = useFieldStore((s) => s.gridHeight);
-  const planToken = useFieldStore((s) => s.planToken);
-  const requestNewPlan = useFieldStore((s) => s.requestNewPlan);
-
   const [promptInput, setPromptInput] = useState(DEFAULT_PROMPT);
   const [plan, setPlan] = useState<ExplanationPlan | null>(null);
+  const [planToken, setPlanToken] = useState(0);
   const [isThinking, setIsThinking] = useState(false);
 
   async function runPrompt(prompt: string) {
     setIsThinking(true);
     const nextPlan = await getExplanationPlan(prompt);
     setPlan(nextPlan);
+    setPlanToken((t) => t + 1);
     setIsThinking(false);
-    requestNewPlan();
   }
 
-  // Show something immediately on load.
   useEffect(() => {
     runPrompt(DEFAULT_PROMPT);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  const steps = useMemo(
-    () => (plan ? layoutPlan(plan, gridWidth, gridHeight) : []),
-    [plan, gridWidth, gridHeight],
-  );
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -46,9 +32,13 @@ export default function App() {
 
   return (
     <div className="app-root">
-      {steps.length > 0 && (
-        <Scene steps={steps} gridWidth={gridWidth} gridHeight={gridHeight} planToken={planToken} />
-      )}
+      <div className="board-wrap">
+        {plan ? (
+          <Board steps={plan.steps} planToken={planToken} />
+        ) : (
+          <p className="loading">Thinking…</p>
+        )}
+      </div>
 
       <form className="prompt-bar" onSubmit={handleSubmit}>
         <input
@@ -62,15 +52,6 @@ export default function App() {
           {isThinking ? "Thinking…" : "Explain"}
         </button>
       </form>
-
-      <div className="hud">
-        <div className="hud-title">
-          <span className="hud-dot" />
-          Perception Field <span className="hud-phase">— explanation-board prototype</span>
-        </div>
-        <DebugPanel />
-        <Toolbar pinCount={gridWidth * gridHeight} />
-      </div>
     </div>
   );
 }
