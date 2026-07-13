@@ -104,6 +104,23 @@ export interface CycleObject {
   transitions?: CycleTransition[];
 }
 
+/**
+ * Nested enclosure: a visible parent boundary that CONTAINS its declared
+ * members (placeable objects, or another container up to depth 2). The model
+ * declares only membership + the semantic boundary style; the compiler sizes
+ * the boundary, packs the members inside, and frames everything — the model
+ * never supplies any geometry. Members render as their own objects, inside.
+ */
+export type ContainerBoundary = "box" | "ellipse" | "organic";
+
+export interface ContainerObject {
+  id: string;
+  type: "container";
+  label?: string;
+  boundary: ContainerBoundary;
+  members: string[];
+}
+
 export type SceneObject =
   | BoxObject
   | CircleObject
@@ -114,7 +131,8 @@ export type SceneObject =
   | ArrowObject
   | LabelObject
   | FreeSketchObject
-  | CycleObject;
+  | CycleObject
+  | ContainerObject;
 
 export type ConstraintKind = "rightOf" | "leftOf" | "above" | "below" | "alignedY" | "alignedX";
 export type Constraint = [ConstraintKind, string, string];
@@ -220,6 +238,12 @@ export function parseSceneGraph(raw: unknown): SceneGraph | null {
       if (members.length >= 3) {
         objects.push({ id, type: "cycle", members, direction, label: isStr(s.label) ? s.label.slice(0, 24) : undefined, transitions });
       }
+    } else if (s.type === "container" && Array.isArray(s.members)) {
+      const members = (s.members as unknown[]).filter(isStr).slice(0, 8);
+      const boundary: ContainerBoundary = s.boundary === "ellipse" ? "ellipse" : s.boundary === "organic" ? "organic" : "box";
+      if (members.length >= 1) {
+        objects.push({ id, type: "container", label: isStr(s.label) ? s.label.slice(0, 24) : undefined, boundary, members });
+      }
     } else {
       continue;
     }
@@ -276,5 +300,76 @@ export function parseSceneGraph(raw: unknown): SceneGraph | null {
     });
   if (!valid.length) return null;
 
+  resolveContainment(valid);
+
   return { objects: valid, constraints };
+}
+
+/**
+ * Resolve container membership in place: a member must exist and be a
+ * containable type, no object may contain itself, each object has at most ONE
+ * direct parent (first container to claim it, in declaration order, wins), and
+ * containment must be acyclic and nested at most 2 deep. Anything violating
+ * these is dropped from the offending container's member list; a container left
+ * empty is turned into a plain (member-less) boundary rather than failing the
+ * whole graph.
+ */
+const CONTAINABLE_TYPES = new Set(["box", "circleShape", "unitCircle", "waveGraph", "freeSketch", "container"]);
+
+function resolveContainment(objects: SceneObject[]): void {
+  const containers = objects.filter((o): o is ContainerObject => o.type === "container");
+  if (!containers.length) return;
+  const byId = new Map(objects.map((o) => [o.id, o] as const));
+  const isContainer = (id: string) => byId.get(id)?.type === "container";
+
+  // 1. Existence + containable-type + no-self + single-parent (greedy claim).
+  const parentOf = new Map<string, string>();
+  for (const c of containers) {
+    c.members = c.members.filter((m) => {
+      const mo = byId.get(m);
+      if (m === c.id || !mo || !CONTAINABLE_TYPES.has(mo.type) || parentOf.has(m)) return false;
+      parentOf.set(m, c.id);
+      return true;
+    });
+  }
+
+  // 2. Break containment cycles: if walking a container's parent chain returns
+  //    to itself, detach it from its parent.
+  const detach = (childId: string) => {
+    const p = parentOf.get(childId);
+    if (!p) return;
+    const pc = byId.get(p) as ContainerObject | undefined;
+    if (pc) pc.members = pc.members.filter((m) => m !== childId);
+    parentOf.delete(childId);
+  };
+  for (const c of containers) {
+    const seen = new Set<string>([c.id]);
+    let cur = parentOf.get(c.id);
+    while (cur) {
+      if (seen.has(cur)) {
+        detach(c.id); // this edge closes a cycle
+        break;
+      }
+      seen.add(cur);
+      cur = parentOf.get(cur);
+    }
+  }
+
+  // 3. Enforce nesting depth <= 2 (a container may hold containers, but no
+  //    deeper). Promote any container whose chain of container-ancestors is too
+  //    long by detaching it from its parent.
+  const containerDepth = (id: string): number => {
+    let d = 1;
+    let cur = parentOf.get(id);
+    let guard = 0;
+    while (cur && isContainer(cur) && guard++ < 16) {
+      d++;
+      cur = parentOf.get(cur);
+    }
+    return d;
+  };
+  // Shallow-to-deep so promotions settle deterministically.
+  for (const c of [...containers].sort((a, b) => containerDepth(a.id) - containerDepth(b.id))) {
+    if (containerDepth(c.id) > 2) detach(c.id);
+  }
 }

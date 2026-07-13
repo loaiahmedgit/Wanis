@@ -10,7 +10,7 @@
  * (MagicGeo-style) is the upgrade path if relational constraints outgrow
  * this — don't start there.
  */
-import type { SceneGraph, SceneObject, Constraint } from "./sceneGraph";
+import type { SceneGraph, SceneObject, Constraint, ContainerObject } from "./sceneGraph";
 import type { StrokeProgram, StrokeGroup, StrokeItem, TextItem } from "./strokeProgram";
 
 interface Box {
@@ -117,11 +117,155 @@ function layout(graph: SceneGraph): Map<string, Box> {
     cycleOffsetX = cx + R + maxDim + GAP * 2;
   }
 
+  // Containers: nested enclosure, sized BOTTOM-UP (deepest container first) so a
+  // parent sees each child container at its final size, then each top-level
+  // container's whole subtree is positioned as a unit. Members that have sibling
+  // relations keep the arrangement the constraints gave them; otherwise they are
+  // grid-packed collision-free. All geometry is computed here.
+  const containerObjs = graph.objects.filter((o): o is ContainerObject => o.type === "container");
+  if (containerObjs.length) {
+    const childrenOf = new Map<string, string[]>();
+    const parentOf = new Map<string, string>();
+    for (const c of containerObjs) {
+      childrenOf.set(c.id, c.members);
+      for (const m of c.members) parentOf.set(m, c.id);
+    }
+    const depthOf = (id: string) => {
+      let d = 1;
+      let cur = parentOf.get(id);
+      let g = 0;
+      while (cur && g++ < 16) {
+        d++;
+        cur = parentOf.get(cur);
+      }
+      return d;
+    };
+    // Move a member and, if it is itself a container, its entire subtree.
+    const translateSubtree = (id: string, dx: number, dy: number) => {
+      const b = boxes.get(id);
+      if (b) {
+        b.x += dx;
+        b.y += dy;
+      }
+      const kids = childrenOf.get(id);
+      if (kids) for (const k of kids) translateSubtree(k, dx, dy);
+    };
+    const PAD = 28; // gap between members and the boundary
+    const INNER_GAP = 26; // gap between packed members
+    const LABEL_BAND = 34; // top band reserved for the container's own label
+    const membersConstrainedTogether = (members: string[]) => {
+      const set = new Set(members);
+      return graph.constraints.some(([, a, b]) => set.has(a) && set.has(b));
+    };
+
+    // Size deepest containers first.
+    for (const c of [...containerObjs].sort((a, b) => depthOf(b.id) - depthOf(a.id))) {
+      const ids = c.members.filter((m) => boxes.get(m));
+      // A rectangular boundary can reserve a top band for its label; a rounded
+      // one (ellipse/organic) instead gets extra size and floats the label in
+      // the space its curve already opens up above the members.
+      const topBand = c.label && c.boundary === "box" ? LABEL_BAND : 0;
+      if (!ids.length) {
+        boxes.set(c.id, { x: 0, y: 0, w: 170, h: 90 + topBand });
+        continue;
+      }
+      const mb = ids.map((m) => boxes.get(m)!);
+      if (!membersConstrainedTogether(c.members)) {
+        // Grid-pack near-square, row-major, collision-free.
+        const cols = Math.ceil(Math.sqrt(ids.length));
+        const cellW = Math.max(...mb.map((b) => b.w)) + INNER_GAP;
+        const cellH = Math.max(...mb.map((b) => b.h)) + INNER_GAP;
+        ids.forEach((m, i) => {
+          const b = boxes.get(m)!;
+          const cx = (i % cols) * cellW + cellW / 2;
+          const cy = topBand + Math.floor(i / cols) * cellH + cellH / 2;
+          translateSubtree(m, cx - (b.x + b.w / 2), cy - (b.y + b.h / 2));
+        });
+      } else if (topBand) {
+        // Preserve the constrained relative arrangement; drop it below the label.
+        const minY0 = Math.min(...mb.map((b) => b.y));
+        ids.forEach((m) => translateSubtree(m, 0, topBand + PAD - minY0));
+      }
+      const minX = Math.min(...mb.map((b) => b.x));
+      const minY = Math.min(...mb.map((b) => b.y));
+      const maxX = Math.max(...mb.map((b) => b.x + b.w));
+      const maxY = Math.max(...mb.map((b) => b.y + b.h));
+      if (c.boundary === "box") {
+        boxes.set(c.id, {
+          x: minX - PAD,
+          y: minY - PAD - topBand,
+          w: maxX - minX + PAD * 2,
+          h: maxY - minY + PAD * 2 + topBand,
+        });
+      } else {
+        // Ellipse/organic must be bigger than the members' bounding rectangle to
+        // clear its corners (a rectangle's minimal enclosing ellipse is ~1.41x
+        // its half-extents); use a small extra margin so an organic wobble that
+        // dips inward still encloses everything.
+        const grow = c.boundary === "organic" ? 1.6 : 1.5;
+        const rx = (maxX - minX) / 2 + PAD;
+        const ry = (maxY - minY) / 2 + PAD;
+        const midX = (minX + maxX) / 2;
+        const midY = (minY + maxY) / 2;
+        boxes.set(c.id, { x: midX - rx * grow, y: midY - ry * grow, w: rx * grow * 2, h: ry * grow * 2 });
+      }
+    }
+
+    // Position top-level containers left-to-right, after any non-container content.
+    let contOffX = Math.max(
+      0,
+      ...[...boxes.entries()].filter(([id]) => !parentOf.has(id) && !childrenOf.has(id)).map(([, b]) => b.x + b.w),
+    );
+    if (contOffX > 0) contOffX += GAP;
+    for (const c of containerObjs) {
+      if (parentOf.has(c.id)) continue; // only top-level containers get re-homed
+      const b = boxes.get(c.id)!;
+      translateSubtree(c.id, contOffX - b.x, MARGIN - b.y);
+      contOffX += b.w + GAP;
+    }
+  }
+
   return boxes;
 }
 
 function circlePath(cx: number, cy: number, r: number): string {
   return `M ${cx + r} ${cy} A ${r} ${r} 0 1 1 ${cx - r} ${cy} A ${r} ${r} 0 1 1 ${cx + r} ${cy}`;
+}
+
+function ellipsePath(cx: number, cy: number, rx: number, ry: number): string {
+  return `M ${cx - rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx + rx} ${cy} A ${rx} ${ry} 0 1 0 ${cx - rx} ${cy} Z`;
+}
+
+/**
+ * A gently-lobed closed blob for an "organic" container boundary (a cell
+ * membrane, an amoeba). Deterministic — the wobble is a fixed function of the
+ * angle, not noise — so the same container always draws the same outline.
+ */
+function organicPath(cx: number, cy: number, rx: number, ry: number): string {
+  const N = 16;
+  const ks: number[] = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    ks.push(1 + 0.06 * Math.sin(3 * a) + 0.035 * Math.cos(5 * a + 1.3));
+  }
+  // Normalize so the largest lobe just reaches rx/ry — the blob fits its box
+  // exactly and never clips at the frame edge.
+  const maxK = Math.max(...ks);
+  const pts: { x: number; y: number }[] = [];
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const k = ks[i] / maxK;
+    pts.push({ x: cx + rx * k * Math.cos(a), y: cy + ry * k * Math.sin(a) });
+  }
+  const mid = (p: { x: number; y: number }, q: { x: number; y: number }) => ({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+  const start = mid(pts[N - 1], pts[0]);
+  let d = `M ${start.x.toFixed(1)} ${start.y.toFixed(1)}`;
+  for (let i = 0; i < N; i++) {
+    const cur = pts[i];
+    const m = mid(cur, pts[(i + 1) % N]);
+    d += ` Q ${cur.x.toFixed(1)} ${cur.y.toFixed(1)} ${m.x.toFixed(1)} ${m.y.toFixed(1)}`;
+  }
+  return d + " Z";
 }
 
 function roundedRectPath(b: Box, rad: number): string {
@@ -176,11 +320,25 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   if (!boxes.size) return null;
   const groups: StrokeGroup[] = [];
 
-  // Emit member objects before cycle arrows regardless of JSON order — the
-  // StrokePlayer draws groups in sequence, so a cycle declared before its
-  // members would otherwise trace its arrows before the boxes they connect.
-  // Stable sort: cycles last, everything else keeps its declared order.
-  const emitOrder = [...graph.objects].sort((a, b) => (a.type === "cycle" ? 1 : 0) - (b.type === "cycle" ? 1 : 0));
+  // Draw order (the StrokePlayer inks groups in sequence): container boundaries
+  // first (outermost, then nested), so each enclosure is drawn before the parts
+  // inside it; then everything in declared order; then cycles last (their arrows
+  // must trace after the member boxes they connect). Graphs without containers
+  // are unaffected — this reduces to the previous "cycles last" order.
+  const containerParent = new Map<string, string>();
+  for (const o of graph.objects) if (o.type === "container") for (const m of o.members) containerParent.set(m, o.id);
+  const containerDepth = (id: string) => {
+    let d = 1;
+    let cur = containerParent.get(id);
+    let g = 0;
+    while (cur && g++ < 16) {
+      d++;
+      cur = containerParent.get(cur);
+    }
+    return d;
+  };
+  const emitPriority = (o: SceneObject) => (o.type === "container" ? -100 + containerDepth(o.id) : o.type === "cycle" ? 100 : 0);
+  const emitOrder = [...graph.objects].sort((a, b) => emitPriority(a) - emitPriority(b));
 
   // Ring geometry per cycle member, so a BRANCH edge (an arrowBetween whose
   // endpoints are two members of the same cycle — e.g. a respiration path
@@ -267,6 +425,19 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
         }
         if (o.label) texts.push({ x: ringC.x, y: ringC.y, text: o.label, css: "vp-label", anchor: "middle" });
       }
+    } else if (o.type === "container" && box) {
+      const c = center(box);
+      let labelY = box.y + 21; // box: inside the reserved top band
+      if (o.boundary === "ellipse") {
+        strokes.push({ d: ellipsePath(c.x, c.y, box.w / 2, box.h / 2), css: "vp-outline" });
+        labelY = c.y - box.h * 0.3; // upper region, where the curve is still wide
+      } else if (o.boundary === "organic") {
+        strokes.push({ d: organicPath(c.x, c.y, box.w / 2, box.h / 2), css: "vp-outline" });
+        labelY = c.y - box.h * 0.3;
+      } else {
+        strokes.push({ d: roundedRectPath(box, 16), css: "vp-outline" });
+      }
+      if (o.label) texts.push({ x: c.x, y: labelY, text: o.label, css: "vp-label", anchor: "middle" });
     } else if (o.type === "box" && box) {
       strokes.push({ d: roundedRectPath(box, 10), css: "vp-outline" });
       if (o.label) {

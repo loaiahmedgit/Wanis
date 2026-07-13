@@ -133,6 +133,17 @@ When a drawing IS warranted, there are three tools — pick in this priority ord
        atmosphere from BOTH plants and animals as separate arrowBetween arrows. Prefer branch arrows between
        members that are NOT already adjacent on the ring (a diagonal reads cleanly; an arrow antiparallel to
        an existing ring edge overlaps it).
+   - {"id":"...","type":"container","label":"...","boundary":"box"|"ellipse"|"organic","members":["<id>",
+     "<id>",...]} — a CONTAINER: a visible boundary that ENCLOSES its members. Declare the member objects
+     separately, then list their ids here; the engine sizes the boundary, packs the members inside, and
+     frames it — you never give coordinates. Use it whenever the concept is "X is made of / contains these
+     parts inside it": a cell and its organelles, an atom and its shell, a computer and its components, a
+     system and its subsystems. Pick the boundary by subject: "organic" for living/blobby things (a cell),
+     "ellipse" for a soft rounded grouping, "box" for a device/system/container. A member MAY itself be
+     another container (nest at most 2 deep — e.g. cell contains nucleus, nucleus contains nucleolus). Each
+     object may sit in only ONE container. Prefer a container over scattering the parts in a row: the goal is
+     ONE integrated illustration, not separate shapes side by side. Do NOT constrain container members (the
+     container packs them).
    - {"id":"...","type":"label","text":"...","near":"<id>","placement":"above"|"below"|"left"|"right"} —
      a text label placed cleanly next to another object (placement optional, default below).
    - {"id":"...","type":"freeSketch","meaning":"...","strokes":["M .. C .. Z", ...]} — the ESCAPE HATCH,
@@ -207,6 +218,11 @@ commentary.
   "sediment","meta"],"direction":"clockwise","transitions":[{"from":"igneous","to":"sediment","label":
   "weathering"},{"from":"sediment","to":"meta","label":"heat & pressure"},{"from":"meta","to":"igneous",
   "label":"melting"}]}],"constraints":[]}}
+- RIGHT (scene graph, CONTAINER): a plant cell — {"sceneGraph":{"objects":[{"id":"cell","type":"container",
+  "label":"Plant Cell","boundary":"organic","members":["nucleus","vacuole","chloro","mito"]},{"id":"nucleus",
+  "type":"circleShape","label":"Nucleus"},{"id":"vacuole","type":"circleShape","label":"Vacuole"},{"id":
+  "chloro","type":"circleShape","label":"Chloroplast"},{"id":"mito","type":"circleShape","label":
+  "Mitochondrion"}],"constraints":[]}} — one integrated cell, organelles enclosed inside, NOT scattered.
 
 STEP KINDS
 - "title": a short heading for what's being explained (e.g. "Solve for x"). Under 30 characters.
