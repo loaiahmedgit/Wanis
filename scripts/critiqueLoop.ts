@@ -42,8 +42,11 @@ import {
   PLANNER_MODEL,
   VISUAL_CRITIC_MODEL,
   SEMANTIC_CRITIC_MODEL,
+  SEMANTIC_FALLBACK_MODEL,
   getKey,
   callGemini,
+  callSemanticResilient,
+  isFallbackCertified,
   renderReal,
   validate,
   httpStatusOf,
@@ -51,6 +54,7 @@ import {
   addCost,
   chromium,
   type Cost,
+  type SemanticPrimaryFailure,
 } from "./pipelineLib";
 
 interface FailureInfo {
@@ -76,8 +80,7 @@ async function visualCritique(key: string, renders: Record<string, Buffer>) {
 }
 
 async function semanticCritique(key: string, question: string, graph: SceneGraph) {
-  const r = await callGemini(
-    SEMANTIC_CRITIC_MODEL,
+  const r = await callSemanticResilient(
     key,
     [{ text: semanticCritiqueInstruction(question, JSON.stringify(graph, null, 1)) }],
     SEMANTIC_SCHEMA,
@@ -85,7 +88,7 @@ async function semanticCritique(key: string, question: string, graph: SceneGraph
   );
   const c = parseSemanticCritique(JSON.parse(r.text));
   if (!c) throw new Error("semantic critique not an object");
-  return { critique: c, cost: r.cost };
+  return { critique: c, cost: r.cost, modelUsed: r.modelUsed, fallbackUsed: r.fallbackUsed, primaryFailure: r.primaryFailure };
 }
 
 async function refine(key: string, question: string, graph: SceneGraph, revisions: string[]) {
@@ -116,6 +119,12 @@ interface AttemptRecord {
   visualApproved: boolean;
   semanticApproved: boolean;
   verdict: "approved" | "rejected" | null;
+  // Semantic-critic provenance (infrastructure resilience): which model actually
+  // produced this attempt's semantic verdict, whether it was the 503 fallback,
+  // and the primary's failure that triggered it.
+  semanticModel: string | null;
+  semanticFallbackUsed: boolean;
+  semanticPrimaryFailure: SemanticPrimaryFailure | null;
   failure?: FailureInfo;
 }
 
@@ -173,6 +182,9 @@ async function processGraph(
       visualApproved: false,
       semanticApproved: false,
       verdict: null,
+      semanticModel: null,
+      semanticFallbackUsed: false,
+      semanticPrimaryFailure: null,
     };
     writeFileSync(join(dir, `graph-${attempt}.json`), JSON.stringify(current.graph, null, 2));
 
@@ -212,8 +224,13 @@ async function processGraph(
       apiCost = addCost(apiCost, sem.cost);
       rec.semantic = sem.critique;
       rec.semanticApproved = isSemanticApproved(sem.critique);
+      rec.semanticModel = sem.modelUsed;
+      rec.semanticFallbackUsed = sem.fallbackUsed;
+      rec.semanticPrimaryFailure = sem.primaryFailure;
       writeFileSync(join(dir, `semantic-${attempt}.json`), JSON.stringify(sem.critique, null, 2));
     } catch (e) {
+      // Reached only when the primary 503'd twice AND the fallback also failed,
+      // or a non-503 error occurred — a genuine infrastructure failure.
       rec.failure = { stage: "semantic", model: SEMANTIC_CRITIC_MODEL, httpStatus: httpStatusOf(e), message: String(e).slice(0, 120) };
       attempts.push(rec);
       terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false });
@@ -261,7 +278,17 @@ async function processGraph(
     : null;
 
   const asRef = (a: AttemptRecord | null) =>
-    a ? { attempt: a.attempt, graph: a.graph, visual: a.visual, semantic: a.semantic, verdict: a.verdict } : null;
+    a
+      ? {
+          attempt: a.attempt,
+          graph: a.graph,
+          visual: a.visual,
+          semantic: a.semantic,
+          verdict: a.verdict,
+          semanticModel: a.semanticModel,
+          semanticFallbackUsed: a.semanticFallbackUsed,
+        }
+      : null;
 
   const failure = attempts.map((a) => a.failure).find((f) => f) ?? null;
   // Which independent dimension(s) the best-reviewed attempt failed on — so an
@@ -271,10 +298,22 @@ async function processGraph(
     bestAttempt && bestAttempt.visual && bestAttempt.semantic
       ? failureDimensions(bestAttempt.visual, bestAttempt.semantic)
       : [];
+  // A fallback verdict may be trainingReady ONLY after the fallback model has
+  // passed the semantic golden cases (certified). If the best attempt's semantic
+  // verdict came from the uncertified fallback, withhold training-readiness even
+  // when the terminal state is approved.
+  const bestUsedFallback = !!bestAttempt?.semanticFallbackUsed;
+  const fallbackCertified = isFallbackCertified(SEMANTIC_FALLBACK_MODEL);
+  const trainingReady = isTrainingReady(terminalState) && (!bestUsedFallback || fallbackCertified);
   const meta = {
     question,
     terminalState,
-    trainingReady: isTrainingReady(terminalState),
+    trainingReady,
+    // Infrastructure-resilience provenance for the decisive (best) attempt.
+    semanticModel: bestAttempt?.semanticModel ?? null,
+    semanticFallbackUsed: bestUsedFallback,
+    fallbackCertified,
+    semanticPrimaryFailure: bestAttempt?.semanticPrimaryFailure ?? null,
     failureDimensions: failureDims,
     // Persist which stage failed, its model, and the raw HTTP status, so a
     // quota (429) is never confused with a quality result during analysis.
@@ -290,6 +329,9 @@ async function processGraph(
       semanticApproved: a.semanticApproved,
       visual: a.visual,
       semantic: a.semantic,
+      semanticModel: a.semanticModel,
+      semanticFallbackUsed: a.semanticFallbackUsed,
+      semanticPrimaryFailure: a.semanticPrimaryFailure,
       failure: a.failure,
     })),
     tokens: { in: apiCost.inTokens, out: apiCost.outTokens },
@@ -298,7 +340,7 @@ async function processGraph(
   };
   writeFileSync(join(dir, "original.json"), JSON.stringify(first.graph, null, 2));
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
-  return { terminalState, best: bestAttempt, failureDimensions: failureDims };
+  return { terminalState, best: bestAttempt, failureDimensions: failureDims, semanticFallbackUsed: bestUsedFallback };
 }
 
 async function run() {
@@ -357,7 +399,8 @@ async function run() {
         console.log(
           `  [${dir.split(/[\\/]/).pop()}] ${r.terminalState}` +
             (b ? ` (vis=${b.visualApproved ? "ok" : "x"} sem=${b.semanticApproved ? "ok" : "x"})` : "") +
-            (r.failureDimensions.length ? ` failed=[${r.failureDimensions.join(",")}]` : ""),
+            (r.failureDimensions.length ? ` failed=[${r.failureDimensions.join(",")}]` : "") +
+            (r.semanticFallbackUsed ? ` [semantic-fallback:${SEMANTIC_FALLBACK_MODEL}]` : ""),
         );
       }
       if (!found) console.log("  (no scene-graph drawing steps)");
