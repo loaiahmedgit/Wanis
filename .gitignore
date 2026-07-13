@@ -32,3 +32,6 @@ fallback-cert.json
 *.njsproj
 *.sln
 *.sw?
+
+# Local staged screenshots for visual review (never committed).
+review/
