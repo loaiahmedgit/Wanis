@@ -69,13 +69,19 @@ const CASES = {
     constraints: [],
   }),
   collision: g({
+    // A box and an oversized circle forced concentric: their outlines cross
+    // (the circle is taller than the box, so it juts out top and bottom while
+    // the box juts out left and right). Two DISTINCT-footprint shapes overlap
+    // visibly — unlike two identical boxes, which merge into one clean outline
+    // and get their labels neatly de-collided. This is a genuine layout
+    // collision the compiler cannot auto-fix (de-collision only moves text).
     objects: [
-      { id: "a", type: "box", label: "Box A" },
-      { id: "b", type: "box", label: "Box B" },
+      { id: "a", type: "box", label: "Reaction" },
+      { id: "c", type: "circleShape", label: "Catalyst", size: 1.3 },
     ],
     constraints: [
-      ["alignedX", "b", "a"],
-      ["alignedY", "b", "a"], // b stacked exactly on a -> overlapping boxes + labels
+      ["alignedX", "c", "a"],
+      ["alignedY", "c", "a"],
     ],
   }),
   foodChain: g({
