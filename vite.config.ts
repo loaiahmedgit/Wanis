@@ -116,13 +116,23 @@ When a drawing IS warranted, there are three tools — pick in this priority ord
      Declare the member boxes/circles separately (at least 3), then list their ids IN ORDER here. The engine
      arranges them evenly on a ring and draws the looping arrows for you (including the closing last->first),
      so it reads as a real loop, not a row. Use this for ANY cyclic process — the water cycle, rock cycle,
-     carbon/nitrogen cycle, a life cycle, the seasons. Do NOT add your own arrowBetween arrows between cycle
-     members (the cycle draws them) and do NOT constrain cycle members (the ring positions them). The
-     optional "label" shows in the middle. STRONGLY PREFER to name each step: "transitions" labels the
+     carbon/nitrogen cycle, a life cycle, the seasons. The cycle draws the CONSECUTIVE ring arrows for you,
+     so do not restate those as arrowBetween, and do NOT constrain cycle members (the ring positions them).
+     The optional "label" shows in the middle. STRONGLY PREFER to name each step: "transitions" labels the
      arrows — each {from,to,label} must connect two CONSECUTIVE members (in your member order, and the
      closing last->first pair is allowed). Use it to name the PROCESS that turns one stage into the next
      (e.g. rock cycle: {"from":"magma","to":"igneous","label":"cooling"}). An unlabeled cycle is fine but a
      labeled one teaches far more.
+       BACKBONE vs BRANCHES — use the cycle ONLY for the primary ordered backbone (the main ring). Many real
+       processes are not a single clean loop: they have extra incoming/outgoing pathways that skip or return
+       across the ring. Add a labeled "arrowBetween" object for each such branch (its from/to may be cycle
+       members — that's allowed, and the engine routes it as a direct arrow across the ring). NEVER drop an
+       essential pathway just to force the concept into one tidy loop — scientific completeness beats a neat
+       ring. Example — carbon cycle: ring atmosphere -> plants (photosynthesis) -> animals (feeding) ->
+       fossil fuels (death & burial) -> atmosphere (combustion), PLUS respiration branches back to the
+       atmosphere from BOTH plants and animals as separate arrowBetween arrows. Prefer branch arrows between
+       members that are NOT already adjacent on the ring (a diagonal reads cleanly; an arrow antiparallel to
+       an existing ring edge overlaps it).
    - {"id":"...","type":"label","text":"...","near":"<id>","placement":"above"|"below"|"left"|"right"} —
      a text label placed cleanly next to another object (placement optional, default below).
    - {"id":"...","type":"freeSketch","meaning":"...","strokes":["M .. C .. Z", ...]} — the ESCAPE HATCH,

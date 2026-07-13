@@ -182,6 +182,35 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   // Stable sort: cycles last, everything else keeps its declared order.
   const emitOrder = [...graph.objects].sort((a, b) => (a.type === "cycle" ? 1 : 0) - (b.type === "cycle" ? 1 : 0));
 
+  // Ring geometry per cycle member, so a BRANCH edge (an arrowBetween whose
+  // endpoints are two members of the same cycle — e.g. a respiration path
+  // across the carbon cycle) can be routed clear of the ring edges and the
+  // center label, instead of cutting a straight chord that sits on top of them.
+  interface RingInfo {
+    cycleId: string;
+    ringC: { x: number; y: number };
+    idx: number;
+    n: number;
+  }
+  const ringMember = new Map<string, RingInfo>();
+  for (const o of graph.objects) {
+    if (o.type !== "cycle") continue;
+    const mb = o.members.map((id) => boxes.get(id)).filter((b): b is Box => !!b);
+    const n = mb.length;
+    if (n < 2) continue;
+    let sx = 0;
+    let sy = 0;
+    for (const b of mb) {
+      const c = center(b);
+      sx += c.x;
+      sy += c.y;
+    }
+    const ringC = { x: sx / n, y: sy / n };
+    o.members.forEach((id, idx) => {
+      if (boxes.get(id)) ringMember.set(id, { cycleId: o.id, ringC, idx, n });
+    });
+  }
+
   for (const o of emitOrder) {
     const strokes: StrokeItem[] = [];
     const texts: TextItem[] = [];
@@ -298,25 +327,62 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
       if (pFromC && pToC) {
         const p1 = fromBox ? anchorOnBoxEdge(fromBox, pToC) : pFromC;
         const p2 = toBox ? anchorOnBoxEdge(toBox, pFromC) : pToC;
-        strokes.push({ d: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`, css: "vp-primary" });
-        const ang = Math.atan2(p2.y - p1.y, p2.x - p1.x);
-        const hl = 10;
-        const a1 = ang + Math.PI * 0.82;
-        const a2 = ang - Math.PI * 0.82;
-        strokes.push({
-          d:
-            `M ${p2.x} ${p2.y} L ${p2.x + hl * Math.cos(a1)} ${p2.y + hl * Math.sin(a1)} ` +
-            `M ${p2.x} ${p2.y} L ${p2.x + hl * Math.cos(a2)} ${p2.y + hl * Math.sin(a2)}`,
-          css: "vp-primary",
-        });
-        if (o.label) {
-          texts.push({
-            x: (p1.x + p2.x) / 2,
-            y: (p1.y + p2.y) / 2 - 10,
-            text: o.label,
-            css: "vp-label",
-            anchor: "middle",
-          });
+        const mx = (p1.x + p2.x) / 2;
+        const my = (p1.y + p2.y) / 2;
+        const rf = ringMember.get(o.from);
+        const rt = ringMember.get(o.to);
+
+        if (rf && rt && rf.cycleId === rt.cycleId) {
+          // BRANCH edge across a cycle ring — route it as a bowed arc so it
+          // clears the ring's own arrows and its center label (a straight
+          // chord sits on top of both, and text de-collision can't move
+          // strokes). Adjacent members share a ring edge that already bows
+          // OUTWARD, so bow this one INWARD to separate them; non-adjacent
+          // members' chord passes near the center, so bow it PERPENDICULAR to
+          // arc around the center label.
+          const ringC = rf.ringC;
+          const rx = mx - ringC.x;
+          const ry = my - ringC.y;
+          const rlen = Math.hypot(rx, ry);
+          const dIdx = Math.abs(rf.idx - rt.idx);
+          const adjacent = dIdx === 1 || dIdx === rf.n - 1;
+          let cx: number;
+          let cy: number;
+          let lx: number;
+          let ly: number;
+          if (adjacent && rlen > 1) {
+            const ux = rx / rlen;
+            const uy = ry / rlen;
+            const bow = 34;
+            cx = mx - ux * bow;
+            cy = my - uy * bow;
+            lx = mx - ux * (bow + 16);
+            ly = my - uy * (bow + 16);
+          } else {
+            const dx = p2.x - p1.x;
+            const dy = p2.y - p1.y;
+            const dlen = Math.hypot(dx, dy) || 1;
+            let px = -dy / dlen;
+            let py = dx / dlen;
+            // Point the bow to the side away from the ring center when the
+            // chord is off-center (keeps the arc clear of the middle label).
+            if (px * rx + py * ry < 0) {
+              px = -px;
+              py = -py;
+            }
+            const bow = 52;
+            cx = mx + px * bow;
+            cy = my + py * bow;
+            lx = mx + px * (bow + 16);
+            ly = my + py * (bow + 16);
+          }
+          strokes.push({ d: `M ${p1.x} ${p1.y} Q ${cx} ${cy} ${p2.x} ${p2.y}`, css: "vp-primary" });
+          strokes.push({ d: arrowHeadPath(p2.x, p2.y, Math.atan2(p2.y - cy, p2.x - cx)), css: "vp-primary" });
+          if (o.label) texts.push({ x: lx, y: ly, text: o.label, css: "vp-label", anchor: "middle" });
+        } else {
+          strokes.push({ d: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`, css: "vp-primary" });
+          strokes.push({ d: arrowHeadPath(p2.x, p2.y, Math.atan2(p2.y - p1.y, p2.x - p1.x)), css: "vp-primary" });
+          if (o.label) texts.push({ x: mx, y: my - 10, text: o.label, css: "vp-label", anchor: "middle" });
         }
       }
     } else if (o.type === "label") {
