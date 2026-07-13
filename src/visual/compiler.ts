@@ -11,7 +11,7 @@
  * this — don't start there.
  */
 import type { SceneGraph, SceneObject, Constraint, ContainerObject, LeverObject } from "./sceneGraph";
-import type { StrokeProgram, StrokeGroup, StrokeItem, TextItem } from "./strokeProgram";
+import type { StrokeProgram, StrokeGroup, StrokeItem, TextItem, FocusRegion } from "./strokeProgram";
 
 interface Box {
   x: number;
@@ -22,6 +22,9 @@ interface Box {
 
 const GAP = 70;
 const MARGIN = 60;
+/** Smallest essential label height in viewBox units — matches `.vp-text` (14px)
+ * in App.css; used by the semantic camera's readability test. */
+const LABEL_FONT_UNITS = 14;
 
 const SIZES: Record<string, { w: number; h: number }> = {
   box: { w: 150, h: 64 },
@@ -300,13 +303,53 @@ function roundedRectPath(b: Box, rad: number): string {
  * (called at the placed origin during emit). The only quantitative input is each
  * point's dimensionless `spanToNext` ratio; never any coordinate.
  */
-function computeLever(o: LeverObject, ox: number, oy: number): { strokes: StrokeItem[]; texts: TextItem[]; w: number; h: number } {
+interface SubGroup {
+  meaning: string;
+  members: string[];
+  strokes: StrokeItem[];
+  texts: TextItem[];
+}
+interface RawFocus {
+  meaning: string;
+  members: string[];
+  groupStart: number;
+  groupCount: number;
+  bounds: [number, number, number, number];
+  kind: "teach" | "overview";
+}
+
+/** 1D interval subtraction: parts of [lo,hi] not covered by any drawn interval. */
+function subtractIntervals(lo: number, hi: number, drawn: [number, number][]): [number, number][] {
+  let segs: [number, number][] = [[lo, hi]];
+  for (const [dl, dr] of drawn) {
+    const next: [number, number][] = [];
+    for (const [a, b] of segs) {
+      if (dr <= a || dl >= b) next.push([a, b]);
+      else {
+        if (a < dl) next.push([a, dl]);
+        if (dr < b) next.push([dr, b]);
+      }
+    }
+    segs = next;
+  }
+  return segs.filter(([a, b]) => b - a > 0.5);
+}
+
+/**
+ * A lever / force diagram. Emits region-ALIGNED stroke groups so the semantic
+ * camera can teach it a frame at a time: shared context (bar title + fulcrum)
+ * first and persistent, then the effort arm, then the load arm — the bar is
+ * split at the fulcrum via interval subtraction so no bar stroke is ever drawn
+ * outside the active frame. Returns groups + focus regions + size; the SAME
+ * function drives sizing (at 0,0) and drawing (at the placed origin).
+ */
+function computeLever(o: LeverObject, ox: number, oy: number): { groups: SubGroup[]; focus: RawFocus[]; w: number; h: number } {
   const pts = o.points;
   const n = pts.length;
   const BAR_BASE = 520;
-  const MIN_GAP = 100; // minimum readable px between adjacent points
+  const MIN_GAP = 100;
   const OVERHANG = 34;
-  const SIDE = 46; // horizontal room for end-point labels/force text
+  const SIDE = 46;
   const FORCE_LEN = 62;
   const FULCRUM_H = 34;
   const FULCRUM_HW = 26;
@@ -314,9 +357,6 @@ function computeLever(o: LeverObject, ox: number, oy: number): { strokes: Stroke
   const MARKER_GAP0 = 30;
   const MARKER_STEP = 28;
 
-  // Normalize spans, then choose a bar length that honors BOTH the declared
-  // proportions and a minimum readable gap (proportions preserved — every gap
-  // scales together).
   const gaps = pts.slice(0, n - 1).map((p) => p.spanToNext ?? 1);
   const total = gaps.reduce((a, b) => a + b, 0) || 1;
   const minGapFrac = Math.min(...gaps) / total;
@@ -327,64 +367,137 @@ function computeLever(o: LeverObject, ox: number, oy: number): { strokes: Stroke
   for (let i = 0; i < n - 1; i++) xs.push(xs[i] + (gaps[i] / total) * barLen);
 
   const hasUp = pts.some((p) => p.force === "up");
-  const hasDown = pts.some((p) => p.force === "down");
-  const barTitleH = o.barLabel ? LABEL_H + 4 : 0; // top band for the bar's own label
+  const barTitleH = o.barLabel ? LABEL_H + 4 : 0;
   const barY = barTitleH + LABEL_H + (hasUp ? FORCE_LEN + LABEL_H : 0) + 6;
-  const belowBand = Math.max(hasDown ? FORCE_LEN + LABEL_H : 0, FULCRUM_H + LABEL_H, LABEL_H);
+  const belowBand = Math.max(pts.some((p) => p.force === "down") ? FORCE_LEN + LABEL_H : 0, FULCRUM_H + LABEL_H, LABEL_H);
   const nMarkers = o.distanceMarkers?.length ?? 0;
   const markersTop = barY + belowBand;
   const totalH = markersTop + (nMarkers ? MARKER_GAP0 + nMarkers * MARKER_STEP : 0) + 10;
   const totalW = startX + barLen + OVERHANG + SIDE;
+  const barLeft = SIDE;
+  const barRight = startX + barLen + OVERHANG;
 
-  const strokes: StrokeItem[] = [];
-  const texts: TextItem[] = [];
   const X = (x: number) => x + ox;
   const Y = (y: number) => y + oy;
-
-  strokes.push({ d: `M ${X(SIDE)} ${Y(barY)} L ${X(startX + barLen + OVERHANG)} ${Y(barY)}`, css: "vp-primary" });
-  if (o.barLabel) texts.push({ x: X(startX + barLen / 2), y: Y(13), text: o.barLabel, css: "vp-label", anchor: "middle" });
-
   const idToX = new Map<string, number>();
-  pts.forEach((p, i) => {
-    const px = xs[i];
-    idToX.set(p.id, px);
-    if (p.role === "fulcrum") {
-      strokes.push({
-        d: `M ${X(px)} ${Y(barY)} L ${X(px - FULCRUM_HW)} ${Y(barY + FULCRUM_H)} L ${X(px + FULCRUM_HW)} ${Y(barY + FULCRUM_H)} Z`,
-        css: "vp-outline",
-      });
-      if (p.label) texts.push({ x: X(px), y: Y(barY + FULCRUM_H + LABEL_H), text: p.label, css: "vp-label", anchor: "middle" });
-    } else if (p.force === "up") {
+  pts.forEach((p, i) => idToX.set(p.id, xs[i]));
+  const fulcrum = pts.find((p) => p.role === "fulcrum")!;
+  const fulcrumX = idToX.get(fulcrum.id)!;
+
+  const barStroke = (lo: number, hi: number): StrokeItem => ({ d: `M ${X(lo)} ${Y(barY)} L ${X(hi)} ${Y(barY)}`, css: "vp-primary" });
+  const drawnBar: [number, number][] = [];
+
+  // Strokes + texts for one point's force arrow and labels.
+  const pointArt = (p: (typeof pts)[number]): { strokes: StrokeItem[]; texts: TextItem[] } => {
+    const px = idToX.get(p.id)!;
+    const s: StrokeItem[] = [];
+    const t: TextItem[] = [];
+    if (p.force === "up") {
       const tipY = barY - FORCE_LEN;
-      strokes.push({ d: `M ${X(px)} ${Y(barY)} L ${X(px)} ${Y(tipY)}`, css: "vp-primary" });
-      strokes.push({ d: arrowHeadPath(X(px), Y(tipY), -Math.PI / 2), css: "vp-primary" });
-      if (p.forceLabel) texts.push({ x: X(px), y: Y(tipY - 8), text: p.forceLabel, css: "vp-label", anchor: "middle" });
-      if (p.label) texts.push({ x: X(px), y: Y(barY + LABEL_H), text: p.label, css: "vp-label", anchor: "middle" });
+      s.push({ d: `M ${X(px)} ${Y(barY)} L ${X(px)} ${Y(tipY)}`, css: "vp-primary" });
+      s.push({ d: arrowHeadPath(X(px), Y(tipY), -Math.PI / 2), css: "vp-primary" });
+      if (p.forceLabel) t.push({ x: X(px), y: Y(tipY - 8), text: p.forceLabel, css: "vp-label", anchor: "middle" });
+      if (p.label) t.push({ x: X(px), y: Y(barY + LABEL_H), text: p.label, css: "vp-label", anchor: "middle" });
     } else if (p.force === "down") {
       const tipY = barY + FORCE_LEN;
-      strokes.push({ d: `M ${X(px)} ${Y(barY)} L ${X(px)} ${Y(tipY)}`, css: "vp-primary" });
-      strokes.push({ d: arrowHeadPath(X(px), Y(tipY), Math.PI / 2), css: "vp-primary" });
-      if (p.forceLabel) texts.push({ x: X(px), y: Y(tipY + 14), text: p.forceLabel, css: "vp-label", anchor: "middle" });
-      if (p.label) texts.push({ x: X(px), y: Y(barY - 10), text: p.label, css: "vp-label", anchor: "middle" });
+      s.push({ d: `M ${X(px)} ${Y(barY)} L ${X(px)} ${Y(tipY)}`, css: "vp-primary" });
+      s.push({ d: arrowHeadPath(X(px), Y(tipY), Math.PI / 2), css: "vp-primary" });
+      if (p.forceLabel) t.push({ x: X(px), y: Y(tipY + 14), text: p.forceLabel, css: "vp-label", anchor: "middle" });
+      if (p.label) t.push({ x: X(px), y: Y(barY - 10), text: p.label, css: "vp-label", anchor: "middle" });
     } else if (p.label) {
-      texts.push({ x: X(px), y: Y(barY - 10), text: p.label, css: "vp-label", anchor: "middle" });
+      t.push({ x: X(px), y: Y(barY - 10), text: p.label, css: "vp-label", anchor: "middle" });
     }
-  });
+    return { strokes: s, texts: t };
+  };
 
-  o.distanceMarkers?.forEach((m, k) => {
+  const markerArt = (m: NonNullable<LeverObject["distanceMarkers"]>[number], k: number): { strokes: StrokeItem[]; texts: TextItem[] } => {
     const x1 = idToX.get(m.from);
     const x2 = idToX.get(m.to);
-    if (x1 === undefined || x2 === undefined) return;
+    if (x1 === undefined || x2 === undefined) return { strokes: [], texts: [] };
     const y = markersTop + MARKER_GAP0 + k * MARKER_STEP;
     const lo = Math.min(x1, x2);
     const hi = Math.max(x1, x2);
-    strokes.push({ d: `M ${X(lo)} ${Y(y)} L ${X(hi)} ${Y(y)}`, css: "vp-axis" });
-    strokes.push({ d: `M ${X(lo)} ${Y(y - 5)} L ${X(lo)} ${Y(y + 5)}`, css: "vp-axis" });
-    strokes.push({ d: `M ${X(hi)} ${Y(y - 5)} L ${X(hi)} ${Y(y + 5)}`, css: "vp-axis" });
-    texts.push({ x: X((lo + hi) / 2), y: Y(y - 6), text: m.label, css: "vp-label", anchor: "middle" });
-  });
+    return {
+      strokes: [
+        { d: `M ${X(lo)} ${Y(y)} L ${X(hi)} ${Y(y)}`, css: "vp-axis" },
+        { d: `M ${X(lo)} ${Y(y - 5)} L ${X(lo)} ${Y(y + 5)}`, css: "vp-axis" },
+        { d: `M ${X(hi)} ${Y(y - 5)} L ${X(hi)} ${Y(y + 5)}`, css: "vp-axis" },
+      ],
+      texts: [{ x: X((lo + hi) / 2), y: Y(y - 6), text: m.label, css: "vp-label", anchor: "middle" }],
+    };
+  };
 
-  return { strokes, texts, w: totalW, h: totalH };
+  // Draw one point's art (fulcrum wedge, or force arrow + labels) once.
+  const drawnPts = new Set<string>();
+  const drawPoint = (g: SubGroup, p: (typeof pts)[number]) => {
+    if (drawnPts.has(p.id)) return;
+    drawnPts.add(p.id);
+    const px = idToX.get(p.id)!;
+    if (p.role === "fulcrum") {
+      g.strokes.push({
+        d: `M ${X(px)} ${Y(barY)} L ${X(px - FULCRUM_HW)} ${Y(barY + FULCRUM_H)} L ${X(px + FULCRUM_HW)} ${Y(barY + FULCRUM_H)} Z`,
+        css: "vp-outline",
+      });
+      if (p.label) g.texts.push({ x: X(px), y: Y(barY + FULCRUM_H + LABEL_H), text: p.label, css: "vp-label", anchor: "middle" });
+    } else {
+      const art = pointArt(p);
+      g.strokes.push(...art.strokes);
+      g.texts.push(...art.texts);
+    }
+  };
+
+  // Teaching frames = a sliding window over ADJACENT points in bar order. Each
+  // frame is a readable local window (works for every lever class, and reduces
+  // to effort+fulcrum then fulcrum+load for a class-1 seesaw). Each frame draws
+  // the bar segment between its two points (no bar stroke ever outside the
+  // active frame), any newly-introduced point, and any distance marker that
+  // fits entirely inside it. Markers spanning multiple frames (the long arm)
+  // are drawn at the final overview where both arms compare.
+  const groups: SubGroup[] = [];
+  const focus: RawFocus[] = [];
+  const usedMarkers = new Set<number>();
+  const frameBounds = (lo: number, hi: number): [number, number, number, number] => [X(lo), Y(0), hi - lo, totalH];
+
+  for (let i = 0; i < n - 1; i++) {
+    const aX = xs[i];
+    const bX = xs[i + 1];
+    const lo = i === 0 ? barLeft : aX;
+    const hi = i === n - 2 ? barRight : bX;
+    const g: SubGroup = { meaning: `${pts[i].label ?? pts[i].role} & ${pts[i + 1].label ?? pts[i + 1].role}`, members: [pts[i].id, pts[i + 1].id], strokes: [], texts: [] };
+    if (i === 0 && o.barLabel) g.texts.push({ x: X(startX + barLen / 2), y: Y(13), text: o.barLabel, css: "vp-label", anchor: "middle" });
+    for (const [s, e] of subtractIntervals(lo, hi, drawnBar)) g.strokes.push(barStroke(s, e));
+    drawnBar.push([lo, hi]);
+    drawPoint(g, pts[i]);
+    drawPoint(g, pts[i + 1]);
+    (o.distanceMarkers ?? []).forEach((m, k) => {
+      if (usedMarkers.has(k)) return;
+      const m1 = idToX.get(m.from);
+      const m2 = idToX.get(m.to);
+      if (m1 === undefined || m2 === undefined) return;
+      if (Math.min(m1, m2) >= lo - 1 && Math.max(m1, m2) <= hi + 1) {
+        const art = markerArt(m, k);
+        g.strokes.push(...art.strokes);
+        g.texts.push(...art.texts);
+        usedMarkers.add(k);
+      }
+    });
+    groups.push(g);
+    focus.push({ meaning: g.meaning, members: g.members, groupStart: i, groupCount: 1, bounds: frameBounds(lo, hi), kind: "teach" });
+  }
+
+  // Overview group: any wide (multi-frame) markers, drawn when the camera pulls
+  // back so both arms are seen together.
+  const overview: SubGroup = { meaning: "whole lever", members: pts.map((p) => p.id), strokes: [], texts: [] };
+  (o.distanceMarkers ?? []).forEach((m, k) => {
+    if (usedMarkers.has(k)) return;
+    const art = markerArt(m, k);
+    overview.strokes.push(...art.strokes);
+    overview.texts.push(...art.texts);
+  });
+  groups.push(overview);
+  focus.push({ meaning: "whole lever", members: pts.map((p) => p.id), groupStart: n - 1, groupCount: 1, bounds: [X(0), Y(0), totalW, totalH], kind: "overview" });
+
+  return { groups, focus, w: totalW, h: totalH };
 }
 
 /** Two short strokes forming an arrowhead at `tip`, pointing along `angle`. */
@@ -427,6 +540,7 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   const boxes = layout(graph);
   if (!boxes.size) return null;
   const groups: StrokeGroup[] = [];
+  const focusRegions: FocusRegion[] = [];
 
   // Draw order (the StrokePlayer inks groups in sequence): container boundaries
   // first (outermost, then nested), so each enclosure is drawn before the parts
@@ -547,9 +661,22 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
       }
       if (o.label) texts.push({ x: c.x, y: labelY, text: o.label, css: "vp-label", anchor: "middle" });
     } else if (o.type === "lever" && box) {
+      // The lever emits region-aligned groups; push them directly and record its
+      // focus regions with absolute group indices. (strokes/texts stay empty so
+      // no extra generic group is added for this object below.)
       const g = computeLever(o, box.x, box.y);
-      strokes.push(...g.strokes);
-      texts.push(...g.texts);
+      const base = groups.length;
+      for (const sg of g.groups) groups.push({ meaning: sg.meaning, strokes: sg.strokes, texts: sg.texts });
+      for (const f of g.focus) {
+        focusRegions.push({
+          bounds: f.bounds,
+          members: f.members,
+          startGroup: base + f.groupStart,
+          endGroup: base + f.groupStart + f.groupCount - 1,
+          kind: f.kind,
+          meaning: f.meaning,
+        });
+      }
     } else if (o.type === "box" && box) {
       strokes.push({ d: roundedRectPath(box, 10), css: "vp-outline" });
       if (o.label) {
@@ -783,5 +910,6 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   return {
     viewBox: [minX - MARGIN, minY - MARGIN, maxX - minX + MARGIN * 2, maxY - minY + MARGIN * 2],
     groups,
+    ...(focusRegions.length ? { focusRegions, minLabelSize: LABEL_FONT_UNITS } : {}),
   };
 }

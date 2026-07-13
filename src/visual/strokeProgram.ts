@@ -34,8 +34,35 @@ export interface StrokeGroup {
   motion?: Motion;
 }
 
+/**
+ * A readable teaching frame over a sub-region of the diagram, for the semantic
+ * camera. The model never supplies these — the compiler derives them from
+ * object bounds + relationships so a too-wide diagram can be taught region by
+ * region on a small viewport instead of shrunk into unreadability. Each region
+ * owns a CONTIGUOUS range of stroke groups (so the pen never draws a major
+ * stroke outside the active frame), plus the bounds the camera should frame.
+ */
+export interface FocusRegion {
+  /** Sub-rect of the program viewBox: [x, y, w, h]. */
+  bounds: [number, number, number, number];
+  /** Semantic object ids this region teaches. */
+  members: string[];
+  /** Inclusive group index range drawn while this region is framed. */
+  startGroup: number;
+  endGroup: number;
+  kind: "teach" | "overview";
+  meaning: string;
+}
+
 export interface StrokeProgram {
   viewBox: [number, number, number, number];
   /** Groups play strictly in order; strokes within a group trace in order. */
   groups: StrokeGroup[];
+  /**
+   * Ordered focus regions for the semantic camera (teaching frames then a final
+   * overview). Absent/empty when the scene is compact enough to read whole.
+   */
+  focusRegions?: FocusRegion[];
+  /** Smallest ESSENTIAL label height in viewBox units, for the activation test. */
+  minLabelSize?: number;
 }

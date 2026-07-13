@@ -18,14 +18,21 @@ import {
 } from "../src/critique/critic";
 import { getKey, callGemini, callSemanticResilient, renderReal, validate, chromium, VISUAL_CRITIC_MODEL } from "./pipelineLib";
 
+// Scientifically complete plant cell: the rigid Cell Wall encloses the Cell
+// Membrane (depth-2 containment), whose interior is the Cytoplasm that holds the
+// organelles. Corrects the earlier fixture, which the semantic critic rightly
+// flagged as incomplete (missing wall/membrane/cytoplasm) — a fixture fix, not a
+// compiler change.
 const PLANT_CELL = {
   objects: [
-    { id: "cell", type: "container", label: "Plant Cell", boundary: "organic", members: ["nucleus", "vacuole", "chloro1", "chloro2", "mito"] },
+    { id: "wall", type: "container", label: "Cell Wall", boundary: "box", members: ["membrane"] },
+    { id: "membrane", type: "container", label: "Cell Membrane", boundary: "organic", members: ["nucleus", "vacuole", "chloro1", "chloro2", "mito"] },
     { id: "nucleus", type: "circleShape", label: "Nucleus", size: 1.1 },
     { id: "vacuole", type: "circleShape", label: "Vacuole", size: 1.2 },
     { id: "chloro1", type: "circleShape", label: "Chloroplast", size: 0.9 },
     { id: "chloro2", type: "circleShape", label: "Chloroplast", size: 0.9 },
     { id: "mito", type: "circleShape", label: "Mitochondrion", size: 0.9 },
+    { id: "cyto", type: "label", text: "Cytoplasm", near: "membrane", placement: "below" },
   ],
   constraints: [],
 };
