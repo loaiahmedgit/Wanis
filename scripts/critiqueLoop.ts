@@ -30,6 +30,7 @@ import {
   isSemanticApproved,
   combinedVerdict,
   deriveTerminalState,
+  failureDimensions,
   isTrainingReady,
   refineInstruction,
   type VisualCritique,
@@ -189,7 +190,7 @@ async function processGraph(
     } catch (e) {
       rec.failure = { stage: "render", model: null, httpStatus: httpStatusOf(e), message: String(e).slice(0, 120) };
       attempts.push(rec);
-      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false, exhausted: false });
+      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false });
       break;
     }
 
@@ -203,7 +204,7 @@ async function processGraph(
     } catch (e) {
       rec.failure = { stage: "visual", model: VISUAL_CRITIC_MODEL, httpStatus: httpStatusOf(e), message: String(e).slice(0, 120) };
       attempts.push(rec);
-      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false, exhausted: false });
+      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false });
       break;
     }
     try {
@@ -215,7 +216,7 @@ async function processGraph(
     } catch (e) {
       rec.failure = { stage: "semantic", model: SEMANTIC_CRITIC_MODEL, httpStatus: httpStatusOf(e), message: String(e).slice(0, 120) };
       attempts.push(rec);
-      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false, exhausted: false });
+      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false });
       break;
     }
 
@@ -227,7 +228,6 @@ async function processGraph(
       failed: false,
       visualApproved: rec.visualApproved,
       semanticApproved: rec.semanticApproved,
-      exhausted: isLast,
     });
     if (rec.verdict === "approved" || isLast) break;
 
@@ -238,19 +238,18 @@ async function processGraph(
       apiCost = addCost(apiCost, rf.cost);
       const revalidated = validate(rf.raw);
       if (!revalidated) {
-        // Couldn't produce a better graph — classify as if exhausted on this attempt.
+        // Couldn't produce a better graph — this rejected attempt stands.
         terminalState = deriveTerminalState({
           failed: false,
           visualApproved: rec.visualApproved,
           semanticApproved: rec.semanticApproved,
-          exhausted: true,
         });
         break;
       }
       current = revalidated;
     } catch (e) {
       rec.failure = { stage: "refine", model: PLANNER_MODEL, httpStatus: httpStatusOf(e), message: String(e).slice(0, 120) };
-      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false, exhausted: false });
+      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false });
       break;
     }
   }
@@ -265,10 +264,18 @@ async function processGraph(
     a ? { attempt: a.attempt, graph: a.graph, visual: a.visual, semantic: a.semantic, verdict: a.verdict } : null;
 
   const failure = attempts.map((a) => a.failure).find((f) => f) ?? null;
+  // Which independent dimension(s) the best-reviewed attempt failed on — so an
+  // exhausted result is legible as "rejected for [semantic]" vs "[visual]",
+  // not lumped together or mislabeled a disagreement.
+  const failureDims =
+    bestAttempt && bestAttempt.visual && bestAttempt.semantic
+      ? failureDimensions(bestAttempt.visual, bestAttempt.semantic)
+      : [];
   const meta = {
     question,
     terminalState,
     trainingReady: isTrainingReady(terminalState),
+    failureDimensions: failureDims,
     // Persist which stage failed, its model, and the raw HTTP status, so a
     // quota (429) is never confused with a quality result during analysis.
     failure,
@@ -291,7 +298,7 @@ async function processGraph(
   };
   writeFileSync(join(dir, "original.json"), JSON.stringify(first.graph, null, 2));
   writeFileSync(join(dir, "meta.json"), JSON.stringify(meta, null, 2));
-  return { terminalState, best: bestAttempt };
+  return { terminalState, best: bestAttempt, failureDimensions: failureDims };
 }
 
 async function run() {
@@ -349,7 +356,8 @@ async function run() {
         const b = r.best;
         console.log(
           `  [${dir.split(/[\\/]/).pop()}] ${r.terminalState}` +
-            (b ? ` (vis=${b.visualApproved ? "ok" : "x"} sem=${b.semanticApproved ? "ok" : "x"})` : ""),
+            (b ? ` (vis=${b.visualApproved ? "ok" : "x"} sem=${b.semanticApproved ? "ok" : "x"})` : "") +
+            (r.failureDimensions.length ? ` failed=[${r.failureDimensions.join(",")}]` : ""),
         );
       }
       if (!found) console.log("  (no scene-graph drawing steps)");

@@ -178,30 +178,44 @@ export function combinedVerdict(v: VisualCritique, s: SemanticCritique): "approv
   return isVisualApproved(v) && isSemanticApproved(s) ? "approved" : "rejected";
 }
 
-/** A "split": exactly one critic approves. Used only to classify the terminal state. */
-export function isSplit(v: VisualCritique, s: SemanticCritique): boolean {
-  return isVisualApproved(v) !== isSemanticApproved(s);
+export type FailureDimension = "visual" | "semantic";
+
+/**
+ * Which independent DIMENSIONS a diagram failed on. The two critics judge
+ * orthogonal axes, so a failing one is a dimension-specific rejection — NOT a
+ * disagreement. [] = both pass.
+ */
+export function failureDimensions(v: VisualCritique, s: SemanticCritique): FailureDimension[] {
+  const dims: FailureDimension[] = [];
+  if (!isVisualApproved(v)) dims.push("visual");
+  if (!isSemanticApproved(s)) dims.push("semantic");
+  return dims;
 }
 
 /**
- * Pure terminal-state classifier (unit-tested, no I/O). Given the outcome of
- * the loop's FINAL reviewed attempt:
- *  - a render/critique failure (e.g. 429)         -> unreviewed_after_failure
- *  - both critics approved                        -> approved
- *  - exhausted, exactly one critic approved (split)-> critic_disagreement
- *  - exhausted, neither approved                  -> exhausted_needs_revision
- * (`invalid` — the graph never compiled — is handled before critics run.)
+ * Pure terminal-state classifier (unit-tested, no I/O):
+ *  - a render/critique failure (e.g. 429)   -> unreviewed_after_failure
+ *  - both critics approved                  -> approved
+ *  - anything else once exhausted           -> exhausted_needs_revision
+ *    (whether one or both critics failed — the failing DIMENSION is recorded
+ *     separately via failureDimensions; a rejection on an independent axis is
+ *     NOT a disagreement).
+ *
+ * critic_disagreement is RESERVED for a genuine same-dimension contradiction
+ * (e.g. a primary semantic critic vs an escalation semantic critic disagreeing
+ * about the SAME axis) — signalled explicitly via sameDimensionContradiction.
+ * It is never produced by two orthogonal critics splitting.
  */
 export function deriveTerminalState(p: {
   failed: boolean;
   visualApproved: boolean;
   semanticApproved: boolean;
-  exhausted: boolean;
+  sameDimensionContradiction?: boolean;
 }): TerminalState {
   if (p.failed) return "unreviewed_after_failure";
   if (p.visualApproved && p.semanticApproved) return "approved";
-  if (!p.exhausted) return "exhausted_needs_revision"; // safety: not a terminal condition mid-loop
-  return p.visualApproved !== p.semanticApproved ? "critic_disagreement" : "exhausted_needs_revision";
+  if (p.sameDimensionContradiction) return "critic_disagreement";
+  return "exhausted_needs_revision";
 }
 
 /** trainingReady is true ONLY for an approved terminal state. */

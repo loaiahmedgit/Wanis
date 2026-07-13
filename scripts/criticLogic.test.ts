@@ -8,6 +8,7 @@ import {
   isSemanticApproved,
   combinedVerdict,
   deriveTerminalState,
+  failureDimensions,
   isTrainingReady,
   parseVisualCritique,
   parseSemanticCritique,
@@ -44,13 +45,20 @@ eq("semantic fail + visual pass -> rejected", combinedVerdict(visPass, semFail),
 eq("semantic pass + visual fail -> rejected", combinedVerdict(visFail, semPass), "rejected");
 eq("both fail -> rejected", combinedVerdict(visFail, semFail), "rejected");
 
-console.log("deriveTerminalState:");
-eq("both approve -> approved", deriveTerminalState({ failed: false, visualApproved: true, semanticApproved: true, exhausted: false }), "approved");
-eq("critics disagree (vis ok, sem no) -> critic_disagreement", deriveTerminalState({ failed: false, visualApproved: true, semanticApproved: false, exhausted: true }), "critic_disagreement");
-eq("critics disagree (sem ok, vis no) -> critic_disagreement", deriveTerminalState({ failed: false, visualApproved: false, semanticApproved: true, exhausted: true }), "critic_disagreement");
-eq("neither + exhausted -> exhausted_needs_revision", deriveTerminalState({ failed: false, visualApproved: false, semanticApproved: false, exhausted: true }), "exhausted_needs_revision");
-eq("either critic 429/fails -> unreviewed_after_failure", deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false, exhausted: false }), "unreviewed_after_failure");
-eq("failure overrides even if a critic passed", deriveTerminalState({ failed: true, visualApproved: true, semanticApproved: true, exhausted: true }), "unreviewed_after_failure");
+console.log("deriveTerminalState (orthogonal critics never disagree):");
+eq("both approve -> approved", deriveTerminalState({ failed: false, visualApproved: true, semanticApproved: true }), "approved");
+eq("visual pass + semantic fail -> exhausted_needs_revision (semantic reason)", deriveTerminalState({ failed: false, visualApproved: true, semanticApproved: false }), "exhausted_needs_revision");
+eq("semantic pass + visual fail -> exhausted_needs_revision (visual reason)", deriveTerminalState({ failed: false, visualApproved: false, semanticApproved: true }), "exhausted_needs_revision");
+eq("neither -> exhausted_needs_revision", deriveTerminalState({ failed: false, visualApproved: false, semanticApproved: false }), "exhausted_needs_revision");
+eq("either critic 429/fails -> unreviewed_after_failure", deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false }), "unreviewed_after_failure");
+eq("failure overrides even if a critic passed", deriveTerminalState({ failed: true, visualApproved: true, semanticApproved: true }), "unreviewed_after_failure");
+eq("RESERVED: same-dimension contradiction -> critic_disagreement", deriveTerminalState({ failed: false, visualApproved: false, semanticApproved: true, sameDimensionContradiction: true }), "critic_disagreement");
+
+console.log("failureDimensions (which orthogonal axis failed):");
+eq("both pass -> []", failureDimensions(visPass, semPass), []);
+eq("visual pass + semantic fail -> [semantic]", failureDimensions(visPass, semFail), ["semantic"]);
+eq("semantic pass + visual fail -> [visual]", failureDimensions(visFail, semPass), ["visual"]);
+eq("both fail -> [visual, semantic]", failureDimensions(visFail, semFail), ["visual", "semantic"]);
 
 console.log("trainingReady only for approved:");
 const states: TerminalState[] = ["approved", "exhausted_needs_revision", "critic_disagreement", "unreviewed_after_failure", "invalid"];
