@@ -3,12 +3,20 @@
  * key loading, per-model Gemini calls, real-UI rendering, and validation.
  * (Node/Playwright only — kept out of src/ which is browser code.)
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { chromium, type Browser } from "playwright";
 import { parseSceneGraph, type SceneGraph } from "../src/visual/sceneGraph";
 import { compileSceneGraph } from "../src/visual/compiler";
 import type { StrokeProgram } from "../src/visual/strokeProgram";
+
+/**
+ * Bump when the critic prompts/schemas/logic change — invalidates all cached
+ * critiques so a stale critic verdict is never reused after the critic itself
+ * changed. Keep in sync with meaningful edits to src/critique/critic.ts.
+ */
+export const CRITIC_VERSION = "2-split-v1";
 
 export const APP = "http://localhost:5173";
 export const PLANNER_MODEL = "gemini-flash-lite-latest";
@@ -89,7 +97,13 @@ export async function callGemini(model: string, key: string, parts: unknown[], s
 }
 
 export function isQuota(e: unknown): boolean {
-  return !!(e && typeof e === "object" && (e as { httpStatus?: number }).httpStatus === 429);
+  return httpStatusOf(e) === 429;
+}
+
+/** The HTTP status attached to a callGemini error, or null. */
+export function httpStatusOf(e: unknown): number | null {
+  const s = e && typeof e === "object" ? (e as { httpStatus?: number }).httpStatus : undefined;
+  return typeof s === "number" ? s : null;
 }
 
 export function encodeGraph(graph: SceneGraph): string {
@@ -124,6 +138,51 @@ export function validate(raw: unknown): { graph: SceneGraph; program: StrokeProg
   const program = compileSceneGraph(graph);
   if (!program) return null;
   return { graph, program };
+}
+
+// ---------- Resumable critic cache ----------
+// Keyed by CRITIC_VERSION + model + a hash of the exact input the critic saw
+// (the graph JSON for semantic; the rendered PNG bytes for visual). A cached
+// critique is reused verbatim, so an already-passed case never re-spends quota.
+
+const CACHE_PATH = join(process.cwd(), "critic-cache.json");
+type Cache = Record<string, unknown>;
+
+export function sha(...parts: (string | Buffer)[]): string {
+  const h = createHash("sha256");
+  for (const p of parts) h.update(p);
+  return h.digest("hex").slice(0, 24);
+}
+
+export function cacheKey(model: string, inputHash: string): string {
+  return `${CRITIC_VERSION}|${model}|${inputHash}`;
+}
+
+export function loadCache(): Cache {
+  if (!existsSync(CACHE_PATH)) return {};
+  try {
+    return JSON.parse(readFileSync(CACHE_PATH, "utf8")) as Cache;
+  } catch {
+    return {};
+  }
+}
+
+export function saveCache(cache: Cache): void {
+  writeFileSync(CACHE_PATH, JSON.stringify(cache, null, 2));
+}
+
+/** Hash of the visual input (all viewport PNGs, in stable name order). */
+export function visualInputHash(renders: Record<string, Buffer>): string {
+  const parts: (string | Buffer)[] = [];
+  for (const name of Object.keys(renders).sort()) {
+    parts.push(name, renders[name]);
+  }
+  return sha(...parts);
+}
+
+/** Hash of the semantic input (question + canonical graph JSON). */
+export function semanticInputHash(question: string, graph: SceneGraph): string {
+  return sha(question, JSON.stringify(graph));
 }
 
 export { chromium };

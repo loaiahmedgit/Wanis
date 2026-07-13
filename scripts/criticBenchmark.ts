@@ -28,8 +28,16 @@ import {
   callGemini,
   renderReal,
   chromium,
+  loadCache,
+  saveCache,
+  cacheKey,
+  visualInputHash,
+  semanticInputHash,
 } from "./pipelineLib";
 import type { Browser } from "playwright";
+
+const cache = loadCache();
+let cacheHits = 0;
 
 const g = (raw: unknown): SceneGraph => {
   const parsed = parseSceneGraph(raw);
@@ -89,16 +97,29 @@ const CASES = {
 
 async function runVisual(key: string, browser: Browser, graph: SceneGraph) {
   const { renders } = await renderReal(browser, graph);
+  const k = cacheKey(VISUAL_CRITIC_MODEL, visualInputHash(renders));
+  if (cache[k]) {
+    cacheHits++;
+    return parseVisualCritique(cache[k])!;
+  }
   const parts: unknown[] = [{ text: visualCritiqueInstruction() }];
   for (const [name, buf] of Object.entries(renders)) {
     parts.push({ text: `[${name} viewport]` });
     parts.push({ inline_data: { mime_type: "image/png", data: buf.toString("base64") } });
   }
   const r = await callGemini(VISUAL_CRITIC_MODEL, key, parts, VISUAL_SCHEMA, "You are a strict visual layout reviewer.");
-  return parseVisualCritique(JSON.parse(r.text))!;
+  const parsed = JSON.parse(r.text);
+  cache[k] = parsed;
+  saveCache(cache);
+  return parseVisualCritique(parsed)!;
 }
 
 async function runSemantic(key: string, question: string, graph: SceneGraph) {
+  const k = cacheKey(SEMANTIC_CRITIC_MODEL, semanticInputHash(question, graph));
+  if (cache[k]) {
+    cacheHits++;
+    return parseSemanticCritique(cache[k])!;
+  }
   const r = await callGemini(
     SEMANTIC_CRITIC_MODEL,
     key,
@@ -106,7 +127,10 @@ async function runSemantic(key: string, question: string, graph: SceneGraph) {
     SEMANTIC_SCHEMA,
     "You are a strict scientific/pedagogical reviewer.",
   );
-  return parseSemanticCritique(JSON.parse(r.text))!;
+  const parsed = JSON.parse(r.text);
+  cache[k] = parsed;
+  saveCache(cache);
+  return parseSemanticCritique(parsed)!;
 }
 
 async function main() {
@@ -167,7 +191,7 @@ async function main() {
   }
 
   const failed = results.filter((r) => !r.pass);
-  console.log(`\n${results.length - failed.length}/${results.length} passed.`);
+  console.log(`\n${results.length - failed.length}/${results.length} passed. (${cacheHits} critic calls served from cache)`);
   process.exit(failed.length ? 1 : 0);
 }
 

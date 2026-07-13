@@ -29,6 +29,8 @@ import {
   isVisualApproved,
   isSemanticApproved,
   combinedVerdict,
+  deriveTerminalState,
+  isTrainingReady,
   refineInstruction,
   type VisualCritique,
   type SemanticCritique,
@@ -43,12 +45,19 @@ import {
   callGemini,
   renderReal,
   validate,
-  isQuota,
+  httpStatusOf,
   emptyCost,
   addCost,
   chromium,
   type Cost,
 } from "./pipelineLib";
+
+interface FailureInfo {
+  stage: "render" | "visual" | "semantic" | "refine";
+  model: string | null;
+  httpStatus: number | null;
+  message: string;
+}
 
 const OUT_DIR = join(process.cwd(), "training-data");
 const MAX_ATTEMPTS = 2;
@@ -105,8 +114,8 @@ interface AttemptRecord {
   semantic: SemanticCritique | null;
   visualApproved: boolean;
   semanticApproved: boolean;
-  verdict: "approved" | "rejected" | "disagreement" | null;
-  error?: string;
+  verdict: "approved" | "rejected" | null;
+  failure?: FailureInfo;
 }
 
 /** Deterministic quality rank of a fully-reviewed attempt. Higher is better. */
@@ -178,58 +187,70 @@ async function processGraph(
         rec.renders.push(f);
       }
     } catch (e) {
-      rec.error = `render failed: ${String(e)}`;
+      rec.failure = { stage: "render", model: null, httpStatus: httpStatusOf(e), message: String(e).slice(0, 120) };
       attempts.push(rec);
-      terminalState = "unreviewed_after_failure";
+      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false, exhausted: false });
       break;
     }
 
-    // Both critics. A 429 in EITHER is a failure (unreviewed), not a negative.
+    // Both critics. A failure (e.g. 429) in EITHER is unreviewed, never a negative.
     try {
       const vis = await visualCritique(key, renders);
       apiCost = addCost(apiCost, vis.cost);
       rec.visual = vis.critique;
       rec.visualApproved = isVisualApproved(vis.critique);
       writeFileSync(join(dir, `visual-${attempt}.json`), JSON.stringify(vis.critique, null, 2));
-
+    } catch (e) {
+      rec.failure = { stage: "visual", model: VISUAL_CRITIC_MODEL, httpStatus: httpStatusOf(e), message: String(e).slice(0, 120) };
+      attempts.push(rec);
+      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false, exhausted: false });
+      break;
+    }
+    try {
       const sem = await semanticCritique(key, question, current.graph);
       apiCost = addCost(apiCost, sem.cost);
       rec.semantic = sem.critique;
       rec.semanticApproved = isSemanticApproved(sem.critique);
       writeFileSync(join(dir, `semantic-${attempt}.json`), JSON.stringify(sem.critique, null, 2));
-
-      rec.verdict = combinedVerdict(vis.critique, sem.critique);
     } catch (e) {
-      rec.error = `${isQuota(e) ? "quota(429)" : "critique failed"}: ${String(e).slice(0, 80)}`;
+      rec.failure = { stage: "semantic", model: SEMANTIC_CRITIC_MODEL, httpStatus: httpStatusOf(e), message: String(e).slice(0, 120) };
       attempts.push(rec);
-      terminalState = "unreviewed_after_failure";
+      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false, exhausted: false });
       break;
     }
+
+    rec.verdict = combinedVerdict(rec.visual, rec.semantic);
     attempts.push(rec);
 
-    if (rec.verdict === "approved") {
-      terminalState = "approved";
-      break;
-    }
-    if (attempt === MAX_ATTEMPTS) {
-      terminalState = rec.verdict === "disagreement" ? "critic_disagreement" : "exhausted_needs_revision";
-      break;
-    }
+    const isLast = attempt === MAX_ATTEMPTS;
+    terminalState = deriveTerminalState({
+      failed: false,
+      visualApproved: rec.visualApproved,
+      semanticApproved: rec.semanticApproved,
+      exhausted: isLast,
+    });
+    if (rec.verdict === "approved" || isLast) break;
 
     // Refine using both critics' revision requests.
-    const revisions = [...(rec.visual?.revisions ?? []), ...(rec.semantic?.revisions ?? [])];
+    const revisions = [...(rec.visual.revisions ?? []), ...(rec.semantic.revisions ?? [])];
     try {
       const rf = await refine(key, question, current.graph, revisions);
       apiCost = addCost(apiCost, rf.cost);
       const revalidated = validate(rf.raw);
       if (!revalidated) {
-        terminalState = rec.verdict === "disagreement" ? "critic_disagreement" : "exhausted_needs_revision";
+        // Couldn't produce a better graph — classify as if exhausted on this attempt.
+        terminalState = deriveTerminalState({
+          failed: false,
+          visualApproved: rec.visualApproved,
+          semanticApproved: rec.semanticApproved,
+          exhausted: true,
+        });
         break;
       }
       current = revalidated;
     } catch (e) {
-      terminalState = "unreviewed_after_failure";
-      void e;
+      rec.failure = { stage: "refine", model: PLANNER_MODEL, httpStatus: httpStatusOf(e), message: String(e).slice(0, 120) };
+      terminalState = deriveTerminalState({ failed: true, visualApproved: false, semanticApproved: false, exhausted: false });
       break;
     }
   }
@@ -243,10 +264,14 @@ async function processGraph(
   const asRef = (a: AttemptRecord | null) =>
     a ? { attempt: a.attempt, graph: a.graph, visual: a.visual, semantic: a.semantic, verdict: a.verdict } : null;
 
+  const failure = attempts.map((a) => a.failure).find((f) => f) ?? null;
   const meta = {
     question,
     terminalState,
-    trainingReady: terminalState === "approved",
+    trainingReady: isTrainingReady(terminalState),
+    // Persist which stage failed, its model, and the raw HTTP status, so a
+    // quota (429) is never confused with a quality result during analysis.
+    failure,
     lastAttempt: asRef(lastAttempt),
     bestAttempt: asRef(bestAttempt),
     attempts: attempts.map((a) => ({
@@ -258,7 +283,7 @@ async function processGraph(
       semanticApproved: a.semanticApproved,
       visual: a.visual,
       semantic: a.semantic,
-      error: a.error,
+      failure: a.failure,
     })),
     tokens: { in: apiCost.inTokens, out: apiCost.outTokens },
     estCostUsd: Number(apiCost.usd.toFixed(6)),

@@ -17,6 +17,8 @@ dist-ssr
 # Generated critique-loop artifacts (screenshots + JSON) — future training
 # data, kept locally, not committed (would bloat the repo with binaries).
 training-data/
+# Resumable critic-benchmark cache (keyed by critic version + model + input).
+critic-cache.json
 
 # Editor directories and files
 .vscode/*

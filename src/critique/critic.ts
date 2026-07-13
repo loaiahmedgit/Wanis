@@ -159,7 +159,7 @@ export function isSemanticApproved(s: SemanticCritique): boolean {
   return s.correct && s.complete && s.transitionOrderCorrect && s.educationalValue >= 3;
 }
 
-// ---------- Combined verdict ----------
+// ---------- Combined verdict + terminal state ----------
 
 export type TerminalState =
   | "approved"
@@ -168,13 +168,45 @@ export type TerminalState =
   | "unreviewed_after_failure"
   | "invalid";
 
-/** Both critics must pass. Disagreement (exactly one passes) is flagged, not approved. */
-export function combinedVerdict(v: VisualCritique, s: SemanticCritique): "approved" | "rejected" | "disagreement" {
-  const vOk = isVisualApproved(v);
-  const sOk = isSemanticApproved(s);
-  if (vOk && sOk) return "approved";
-  if (!vOk && !sOk) return "rejected";
-  return "disagreement";
+/**
+ * The per-attempt verdict is BINARY: approved iff BOTH critics pass, else
+ * rejected. (So "semantic fail + visual pass" and "semantic pass + visual
+ * fail" are both `rejected` here — they drive a refine.) Disagreement is a
+ * TERMINAL concern, not a per-attempt verdict — see deriveTerminalState.
+ */
+export function combinedVerdict(v: VisualCritique, s: SemanticCritique): "approved" | "rejected" {
+  return isVisualApproved(v) && isSemanticApproved(s) ? "approved" : "rejected";
+}
+
+/** A "split": exactly one critic approves. Used only to classify the terminal state. */
+export function isSplit(v: VisualCritique, s: SemanticCritique): boolean {
+  return isVisualApproved(v) !== isSemanticApproved(s);
+}
+
+/**
+ * Pure terminal-state classifier (unit-tested, no I/O). Given the outcome of
+ * the loop's FINAL reviewed attempt:
+ *  - a render/critique failure (e.g. 429)         -> unreviewed_after_failure
+ *  - both critics approved                        -> approved
+ *  - exhausted, exactly one critic approved (split)-> critic_disagreement
+ *  - exhausted, neither approved                  -> exhausted_needs_revision
+ * (`invalid` — the graph never compiled — is handled before critics run.)
+ */
+export function deriveTerminalState(p: {
+  failed: boolean;
+  visualApproved: boolean;
+  semanticApproved: boolean;
+  exhausted: boolean;
+}): TerminalState {
+  if (p.failed) return "unreviewed_after_failure";
+  if (p.visualApproved && p.semanticApproved) return "approved";
+  if (!p.exhausted) return "exhausted_needs_revision"; // safety: not a terminal condition mid-loop
+  return p.visualApproved !== p.semanticApproved ? "critic_disagreement" : "exhausted_needs_revision";
+}
+
+/** trainingReady is true ONLY for an approved terminal state. */
+export function isTrainingReady(t: TerminalState): boolean {
+  return t === "approved";
 }
 
 // ---------- Refiner ----------
