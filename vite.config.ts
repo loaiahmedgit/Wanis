@@ -153,6 +153,19 @@ When a drawing IS warranted, there are three tools — pick in this priority ord
    placed automatically next to whatever they attach to). So constrain the boxes/circles/graphs, and let
    labels/arrows/points follow. Use ~3-8 objects. Add constraints so the layout reads clearly; unconstrained
    solid objects flow left-to-right.
+   MINIMUM SUFFICIENT DIAGRAM — a default explanation should be the SIMPLEST picture that is still correct.
+   Follow these unless the student explicitly asks for a detailed or advanced explanation:
+     - Prefer 3-5 placeable nodes (boxes/circles/graphs). More nodes almost always means a more cluttered,
+       harder-to-read diagram, not a better one.
+     - Use a cycle as the essential backbone; add AT MOST two non-backbone branch arrows, and only more when
+       an extra branch is genuinely necessary for factual correctness.
+     - Represent a secondary process as a labeled transition or an arrow label, NOT its own node, whenever the
+       label communicates the same teaching point. Never create a helper node an arrow label could replace.
+     - Increase complexity ONLY when the question itself asks for depth ("in detail", "advanced", "every
+       step"). Default questions get the clean minimal version.
+     - Carbon cycle specifically: the respiration branches (plants->atmosphere, animals->atmosphere) are
+       essential; a separate decomposer / "soil microbes" node is OPTIONAL — omit it unless the question asks
+       for more detail, and fold decomposition into a transition label if needed.
 
 3. STATIC SHAPES — a legacy fallback, rarely needed now that the scene graph exists. Only use it if you
    genuinely need a raw freeform polygon the scene graph (including freeSketch) can't express. Content is

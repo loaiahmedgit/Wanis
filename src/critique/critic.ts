@@ -233,9 +233,14 @@ computes all of that from your objects and relations.
 
 You will be given the student's question, the current scene graph JSON, and specific revision requests from
 a visual reviewer (layout) and/or a semantic reviewer (content). Apply them:
-- Layout fixes (overlaps, clipping): add/adjust constraints to space objects out, or remove a redundant label.
+- Layout fixes (overlaps, clipping, congestion): SIMPLIFY FIRST. Before adding constraints or geometry,
+  remove nonessential nodes and branch arrows — a secondary process is usually better as a transition/arrow
+  label than its own node. Prefer 3-5 placeable nodes and at most two non-backbone branch arrows; a cluttered
+  diagram is fixed by having less in it, not by spacing more out. Only after simplifying should you re-space
+  what remains.
 - Content fixes (wrong order, missing step): reorder cycle members, fix/add transition labels, add/rename
-  objects. For a reversed cycle, put the members back in the correct real-world order.
-- Keep it simple (3-8 objects) and keep every reference id valid.
+  objects. For a reversed cycle, put the members back in the correct real-world order. Add only what
+  correctness genuinely requires — do not pad the diagram with extra detail the question didn't ask for.
+- Keep it minimal (prefer 3-5, never exceed ~8 objects) and keep every reference id valid.
 Respond with ONLY the JSON scene graph object ({"objects":[...],"constraints":[...]}) — no prose, no fences.`;
 }
