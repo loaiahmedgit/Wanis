@@ -144,6 +144,16 @@ When a drawing IS warranted, there are three tools — pick in this priority ord
      object may sit in only ONE container. Prefer a container over scattering the parts in a row: the goal is
      ONE integrated illustration, not separate shapes side by side. Do NOT constrain container members (the
      container packs them).
+   - {"id":"...","type":"lever","barLabel"?:"...","points":[{"id":"...","role":"effort"|"load"|"fulcrum",
+     "label":"...","force":"up"|"down","forceLabel":"50 N","spanToNext":<number>}, ...],"distanceMarkers":
+     [{"from":"<pointId>","to":"<pointId>","label":"..."}]} — a LEVER / force system (a simple machine). List
+     the points IN ORDER left-to-right along the bar; the engine draws the bar, the fulcrum wedge, the force
+     arrows, and the labeled moment-arm dimension lines. Rules: exactly ONE point with role "fulcrum", at
+     least one "effort" and one "load", 3-5 points total. "force" is the arrow direction at that point
+     (up/down; omit for the fulcrum). "spanToNext" is the RELATIVE gap to the next point (a plain ratio, NOT
+     pixels — use it to show a longer effort arm vs load arm, i.e. mechanical advantage); default 1.
+     "distanceMarkers" bracket the arms between two points. You give NO coordinates. Use this for seesaws,
+     wheelbarrows, crowbars, the human forearm, scales, and other lever problems.
    - {"id":"...","type":"label","text":"...","near":"<id>","placement":"above"|"below"|"left"|"right"} —
      a text label placed cleanly next to another object (placement optional, default below).
    - {"id":"...","type":"freeSketch","meaning":"...","strokes":["M .. C .. Z", ...]} — the ESCAPE HATCH,
@@ -223,6 +233,12 @@ commentary.
   "type":"circleShape","label":"Nucleus"},{"id":"vacuole","type":"circleShape","label":"Vacuole"},{"id":
   "chloro","type":"circleShape","label":"Chloroplast"},{"id":"mito","type":"circleShape","label":
   "Mitochondrion"}],"constraints":[]}} — one integrated cell, organelles enclosed inside, NOT scattered.
+- RIGHT (scene graph, LEVER): a class-2 lever (wheelbarrow) — {"sceneGraph":{"objects":[{"id":"lev","type":
+  "lever","points":[{"id":"f","role":"fulcrum","label":"Wheel","spanToNext":1},{"id":"l","role":"load",
+  "label":"Load","force":"down","forceLabel":"300 N","spanToNext":2},{"id":"e","role":"effort","label":
+  "Effort","force":"up","forceLabel":"100 N"}],"distanceMarkers":[{"from":"f","to":"l","label":"load arm"},
+  {"from":"f","to":"e","label":"effort arm"}]}],"constraints":[]}} — the long effort arm shows the mechanical
+  advantage; the engine places everything.
 
 STEP KINDS
 - "title": a short heading for what's being explained (e.g. "Solve for x"). Under 30 characters.

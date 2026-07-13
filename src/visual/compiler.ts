@@ -10,7 +10,7 @@
  * (MagicGeo-style) is the upgrade path if relational constraints outgrow
  * this — don't start there.
  */
-import type { SceneGraph, SceneObject, Constraint, ContainerObject } from "./sceneGraph";
+import type { SceneGraph, SceneObject, Constraint, ContainerObject, LeverObject } from "./sceneGraph";
 import type { StrokeProgram, StrokeGroup, StrokeItem, TextItem } from "./strokeProgram";
 
 interface Box {
@@ -225,6 +225,19 @@ function layout(graph: SceneGraph): Map<string, Box> {
     }
   }
 
+  // Levers: a self-contained composite. Reserve each one's bounding box (its
+  // intrinsic size comes from computeLever) so framing includes it; emit draws
+  // the detail from the same function at this origin.
+  const leverObjs = graph.objects.filter((o): o is LeverObject => o.type === "lever");
+  if (leverObjs.length) {
+    let leverOffX = boxes.size ? Math.max(...[...boxes.values()].map((b) => b.x + b.w)) + GAP : 0;
+    for (const o of leverObjs) {
+      const { w, h } = computeLever(o, 0, 0);
+      boxes.set(o.id, { x: leverOffX, y: MARGIN, w, h });
+      leverOffX += w + GAP;
+    }
+  }
+
   return boxes;
 }
 
@@ -277,6 +290,101 @@ function roundedRectPath(b: Box, rad: number): string {
     `L ${x + r} ${y + h} Q ${x} ${y + h} ${x} ${y + h - r} ` +
     `L ${x} ${y + r} Q ${x} ${y} ${x + r} ${y} Z`
   );
+}
+
+/**
+ * A lever / force diagram, computed entirely from the declared points — bar,
+ * fulcrum wedge, force arrows, and moment-arm dimension lines. Returns
+ * self-contained strokes + texts offset by (ox, oy) plus the intrinsic size, so
+ * the SAME function drives both sizing (called at 0,0 during layout) and drawing
+ * (called at the placed origin during emit). The only quantitative input is each
+ * point's dimensionless `spanToNext` ratio; never any coordinate.
+ */
+function computeLever(o: LeverObject, ox: number, oy: number): { strokes: StrokeItem[]; texts: TextItem[]; w: number; h: number } {
+  const pts = o.points;
+  const n = pts.length;
+  const BAR_BASE = 520;
+  const MIN_GAP = 100; // minimum readable px between adjacent points
+  const OVERHANG = 34;
+  const SIDE = 46; // horizontal room for end-point labels/force text
+  const FORCE_LEN = 62;
+  const FULCRUM_H = 34;
+  const FULCRUM_HW = 26;
+  const LABEL_H = 20;
+  const MARKER_GAP0 = 30;
+  const MARKER_STEP = 28;
+
+  // Normalize spans, then choose a bar length that honors BOTH the declared
+  // proportions and a minimum readable gap (proportions preserved — every gap
+  // scales together).
+  const gaps = pts.slice(0, n - 1).map((p) => p.spanToNext ?? 1);
+  const total = gaps.reduce((a, b) => a + b, 0) || 1;
+  const minGapFrac = Math.min(...gaps) / total;
+  const barLen = Math.max(BAR_BASE, MIN_GAP / minGapFrac);
+
+  const startX = SIDE + OVERHANG;
+  const xs: number[] = [startX];
+  for (let i = 0; i < n - 1; i++) xs.push(xs[i] + (gaps[i] / total) * barLen);
+
+  const hasUp = pts.some((p) => p.force === "up");
+  const hasDown = pts.some((p) => p.force === "down");
+  const barTitleH = o.barLabel ? LABEL_H + 4 : 0; // top band for the bar's own label
+  const barY = barTitleH + LABEL_H + (hasUp ? FORCE_LEN + LABEL_H : 0) + 6;
+  const belowBand = Math.max(hasDown ? FORCE_LEN + LABEL_H : 0, FULCRUM_H + LABEL_H, LABEL_H);
+  const nMarkers = o.distanceMarkers?.length ?? 0;
+  const markersTop = barY + belowBand;
+  const totalH = markersTop + (nMarkers ? MARKER_GAP0 + nMarkers * MARKER_STEP : 0) + 10;
+  const totalW = startX + barLen + OVERHANG + SIDE;
+
+  const strokes: StrokeItem[] = [];
+  const texts: TextItem[] = [];
+  const X = (x: number) => x + ox;
+  const Y = (y: number) => y + oy;
+
+  strokes.push({ d: `M ${X(SIDE)} ${Y(barY)} L ${X(startX + barLen + OVERHANG)} ${Y(barY)}`, css: "vp-primary" });
+  if (o.barLabel) texts.push({ x: X(startX + barLen / 2), y: Y(13), text: o.barLabel, css: "vp-label", anchor: "middle" });
+
+  const idToX = new Map<string, number>();
+  pts.forEach((p, i) => {
+    const px = xs[i];
+    idToX.set(p.id, px);
+    if (p.role === "fulcrum") {
+      strokes.push({
+        d: `M ${X(px)} ${Y(barY)} L ${X(px - FULCRUM_HW)} ${Y(barY + FULCRUM_H)} L ${X(px + FULCRUM_HW)} ${Y(barY + FULCRUM_H)} Z`,
+        css: "vp-outline",
+      });
+      if (p.label) texts.push({ x: X(px), y: Y(barY + FULCRUM_H + LABEL_H), text: p.label, css: "vp-label", anchor: "middle" });
+    } else if (p.force === "up") {
+      const tipY = barY - FORCE_LEN;
+      strokes.push({ d: `M ${X(px)} ${Y(barY)} L ${X(px)} ${Y(tipY)}`, css: "vp-primary" });
+      strokes.push({ d: arrowHeadPath(X(px), Y(tipY), -Math.PI / 2), css: "vp-primary" });
+      if (p.forceLabel) texts.push({ x: X(px), y: Y(tipY - 8), text: p.forceLabel, css: "vp-label", anchor: "middle" });
+      if (p.label) texts.push({ x: X(px), y: Y(barY + LABEL_H), text: p.label, css: "vp-label", anchor: "middle" });
+    } else if (p.force === "down") {
+      const tipY = barY + FORCE_LEN;
+      strokes.push({ d: `M ${X(px)} ${Y(barY)} L ${X(px)} ${Y(tipY)}`, css: "vp-primary" });
+      strokes.push({ d: arrowHeadPath(X(px), Y(tipY), Math.PI / 2), css: "vp-primary" });
+      if (p.forceLabel) texts.push({ x: X(px), y: Y(tipY + 14), text: p.forceLabel, css: "vp-label", anchor: "middle" });
+      if (p.label) texts.push({ x: X(px), y: Y(barY - 10), text: p.label, css: "vp-label", anchor: "middle" });
+    } else if (p.label) {
+      texts.push({ x: X(px), y: Y(barY - 10), text: p.label, css: "vp-label", anchor: "middle" });
+    }
+  });
+
+  o.distanceMarkers?.forEach((m, k) => {
+    const x1 = idToX.get(m.from);
+    const x2 = idToX.get(m.to);
+    if (x1 === undefined || x2 === undefined) return;
+    const y = markersTop + MARKER_GAP0 + k * MARKER_STEP;
+    const lo = Math.min(x1, x2);
+    const hi = Math.max(x1, x2);
+    strokes.push({ d: `M ${X(lo)} ${Y(y)} L ${X(hi)} ${Y(y)}`, css: "vp-axis" });
+    strokes.push({ d: `M ${X(lo)} ${Y(y - 5)} L ${X(lo)} ${Y(y + 5)}`, css: "vp-axis" });
+    strokes.push({ d: `M ${X(hi)} ${Y(y - 5)} L ${X(hi)} ${Y(y + 5)}`, css: "vp-axis" });
+    texts.push({ x: X((lo + hi) / 2), y: Y(y - 6), text: m.label, css: "vp-label", anchor: "middle" });
+  });
+
+  return { strokes, texts, w: totalW, h: totalH };
 }
 
 /** Two short strokes forming an arrowhead at `tip`, pointing along `angle`. */
@@ -438,6 +546,10 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
         strokes.push({ d: roundedRectPath(box, 16), css: "vp-outline" });
       }
       if (o.label) texts.push({ x: c.x, y: labelY, text: o.label, css: "vp-label", anchor: "middle" });
+    } else if (o.type === "lever" && box) {
+      const g = computeLever(o, box.x, box.y);
+      strokes.push(...g.strokes);
+      texts.push(...g.texts);
     } else if (o.type === "box" && box) {
       strokes.push({ d: roundedRectPath(box, 10), css: "vp-outline" });
       if (o.label) {

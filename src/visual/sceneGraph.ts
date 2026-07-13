@@ -121,6 +121,40 @@ export interface ContainerObject {
   members: string[];
 }
 
+/**
+ * A lever / force system (a simple machine). The model declares the ordered
+ * points along the bar and their ROLES + force directions; the compiler
+ * computes the bar, fulcrum wedge, force arrows, moment-arm dimension lines, and
+ * all placement. `spanToNext` is a DIMENSIONLESS ratio of the gap to the next
+ * point (never pixels) — the only quantitative input, so arm-length differences
+ * (mechanical advantage) can be shown. No coordinates ever come from the model.
+ */
+export interface LeverPoint {
+  id: string;
+  role: "effort" | "load" | "fulcrum";
+  label?: string;
+  /** Direction of the force arrow at this point (omit for no arrow, e.g. the fulcrum). */
+  force?: "up" | "down";
+  forceLabel?: string;
+  /** Relative gap to the NEXT point in order; ignored on the last point. Default 1, clamped 0.25-6. */
+  spanToNext?: number;
+}
+
+export interface LeverDistanceMarker {
+  from: string;
+  to: string;
+  label: string;
+}
+
+export interface LeverObject {
+  id: string;
+  type: "lever";
+  barLabel?: string;
+  /** Points in order along the bar, left -> right. */
+  points: LeverPoint[];
+  distanceMarkers?: LeverDistanceMarker[];
+}
+
 export type SceneObject =
   | BoxObject
   | CircleObject
@@ -132,7 +166,8 @@ export type SceneObject =
   | LabelObject
   | FreeSketchObject
   | CycleObject
-  | ContainerObject;
+  | ContainerObject
+  | LeverObject;
 
 export type ConstraintKind = "rightOf" | "leftOf" | "above" | "below" | "alignedY" | "alignedX";
 export type Constraint = [ConstraintKind, string, string];
@@ -244,6 +279,51 @@ export function parseSceneGraph(raw: unknown): SceneGraph | null {
       if (members.length >= 1) {
         objects.push({ id, type: "container", label: isStr(s.label) ? s.label.slice(0, 24) : undefined, boundary, members });
       }
+    } else if (s.type === "lever" && Array.isArray(s.points)) {
+      const points: LeverPoint[] = [];
+      const seen = new Set<string>();
+      for (const p of s.points as unknown[]) {
+        const pr = p as Record<string, unknown>;
+        if (!pr || !isStr(pr.id) || seen.has(pr.id)) continue;
+        const role = pr.role === "effort" || pr.role === "load" || pr.role === "fulcrum" ? pr.role : null;
+        if (!role) continue; // an unknown role is unusable — drop just this point
+        seen.add(pr.id);
+        points.push({
+          id: pr.id.slice(0, 24),
+          role,
+          label: isStr(pr.label) ? pr.label.slice(0, 20) : undefined,
+          // Invalid force value defaults safely to "no arrow" rather than failing.
+          force: pr.force === "up" || pr.force === "down" ? pr.force : undefined,
+          forceLabel: isStr(pr.forceLabel) ? pr.forceLabel.slice(0, 12) : undefined,
+          // Positive finite only; default 1; clamp to a readable, bounded range.
+          spanToNext: isNum(pr.spanToNext) && pr.spanToNext > 0 ? clamp(pr.spanToNext, 0.25, 6) : 1,
+        });
+      }
+      const fulcra = points.filter((p) => p.role === "fulcrum").length;
+      const efforts = points.filter((p) => p.role === "effort").length;
+      const loads = points.filter((p) => p.role === "load").length;
+      // A well-formed lever: 3-5 points, exactly one fulcrum, >=1 effort, >=1 load.
+      if (points.length >= 3 && points.length <= 5 && fulcra === 1 && efforts >= 1 && loads >= 1) {
+        const pids = new Set(points.map((p) => p.id));
+        const markers = Array.isArray(s.distanceMarkers)
+          ? (s.distanceMarkers as unknown[])
+              .map((m) => m as Record<string, unknown>)
+              .filter(
+                (m) =>
+                  m && isStr(m.from) && isStr(m.to) && m.from !== m.to && pids.has(m.from as string) && pids.has(m.to as string) && isStr(m.label),
+              )
+              .map((m) => ({ from: m.from as string, to: m.to as string, label: (m.label as string).slice(0, 16) }))
+              .slice(0, 4)
+          : undefined;
+        objects.push({
+          id,
+          type: "lever",
+          barLabel: isStr(s.barLabel) ? s.barLabel.slice(0, 20) : undefined,
+          points,
+          distanceMarkers: markers && markers.length ? markers : undefined,
+        });
+      }
+      // else: malformed lever is dropped (not pushed) — never crashes the graph.
     } else {
       continue;
     }
