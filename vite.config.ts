@@ -34,6 +34,22 @@ const EXPLANATION_SCHEMA = {
         required: ["kind", "content"],
       },
     },
+    // Optional multi-section LESSON BOARD (additive — a normal answer leaves this
+    // empty and uses `steps`). Each section's content is a STRING: the text, or
+    // for a sceneGraph section the stringified scene-graph JSON.
+    sections: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          id: { type: "STRING" },
+          role: { type: "STRING", enum: ["heading", "explanation", "equation", "sceneGraph", "callout"] },
+          content: { type: "STRING" },
+          target: { type: "STRING" },
+        },
+        required: ["id", "role", "content"],
+      },
+    },
   },
   required: ["steps"],
 };
@@ -257,12 +273,33 @@ Steps are drawn in the exact order you return them — that is the literal seque
 screen while narrating. Order them the way a teacher would actually build the explanation, live.
 
 Return as many steps as the topic genuinely needs (typically 5-14). Do not include markdown, LaTeX syntax,
-or meta-commentary about your own reasoning — only the board content itself.`;
+or meta-commentary about your own reasoning — only the board content itself.
+
+LESSON BOARD (optional, for a MULTI-PART lesson)
+Most answers are a single flowing sequence of "steps" — keep using that. But when a topic genuinely has 2-6
+DISTINCT parts that belong side by side on one board (a definition, a derivation, a diagram, a worked
+example, a takeaway), you may instead return a "sections" array and an EMPTY "steps" array. The board lays
+the sections out spatially and the camera focuses each one as it is completed, while earlier parts stay
+visible — like a teacher filling a whiteboard. Each section: {"id": "...", "role": "heading" | "explanation"
+| "equation" | "sceneGraph" | "callout", "content": "...", "target": "<section id>"?}. "content" is a STRING:
+the text for heading/explanation/equation/callout, or the stringified scene-graph JSON (the same
+{"objects":[...],"constraints":[...]} you would put in a drawing step) for a "sceneGraph" section. A
+"callout" is a short highlighted takeaway; give it a "target" to tie it to the section it comments on. You
+still give NO positions, sizes, camera, or timing — only the ordered sections and their roles. Use a lesson
+board only when the spatial, multi-part layout genuinely helps; otherwise use steps.
+Example: {"steps":[],"sections":[{"id":"h","role":"heading","content":"Electric Potential"},{"id":"eq",
+"role":"equation","content":"V = kQ/r"},{"id":"fig","role":"sceneGraph","content":"{\\"objects\\":[{\\"id\\":
+\\"q\\",\\"type\\":\\"circleShape\\",\\"label\\":\\"+Q\\"},{\\"id\\":\\"p\\",\\"type\\":\\"box\\",\\"label\\":
+\\"test point\\"},{\\"id\\":\\"a\\",\\"type\\":\\"arrowBetween\\",\\"from\\":\\"q\\",\\"to\\":\\"p\\"}],
+\\"constraints\\":[[\\"rightOf\\",\\"p\\",\\"q\\"],[\\"alignedY\\",\\"p\\",\\"q\\"]]}"},{"id":"c","role":
+"callout","target":"fig","content":"Closer means stronger"}]}`;
 
 const GROQ_JSON_INSTRUCTION = `${SYSTEM_INSTRUCTION}
 
 Respond with ONLY a JSON object of the exact shape:
 {"steps": [{"kind": "title" | "text" | "equation" | "drawing", "content": string}, ...]}
+or, for a multi-part lesson board (see LESSON BOARD above), an empty steps array plus sections:
+{"steps": [], "sections": [{"id": string, "role": "heading"|"explanation"|"equation"|"sceneGraph"|"callout", "content": string, "target"?: string}, ...]}
 No markdown fences, no other keys, no commentary.`;
 
 function readBody(req: Connect.IncomingMessage): Promise<string> {
@@ -285,7 +322,12 @@ interface StepPayload {
   content: string;
 }
 
-async function callGemini(modelId: string, apiKey: string, prompt: string): Promise<StepPayload[]> {
+interface PlanPayload {
+  steps: StepPayload[];
+  sections?: unknown[];
+}
+
+async function callGemini(modelId: string, apiKey: string, prompt: string): Promise<PlanPayload> {
   const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelId}:generateContent`, {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-goog-api-key": apiKey },
@@ -311,11 +353,11 @@ async function callGemini(modelId: string, apiKey: string, prompt: string): Prom
   const json = (await res.json()) as { candidates?: { content?: { parts?: { text?: string }[] } }[] };
   const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error("Gemini returned no content");
-  const parsed = JSON.parse(text) as { steps: StepPayload[] };
-  return parsed.steps;
+  const parsed = JSON.parse(text) as PlanPayload;
+  return { steps: parsed.steps ?? [], sections: parsed.sections };
 }
 
-async function callGroq(modelId: string, apiKey: string, prompt: string): Promise<StepPayload[]> {
+async function callGroq(modelId: string, apiKey: string, prompt: string): Promise<PlanPayload> {
   const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
@@ -341,8 +383,8 @@ async function callGroq(modelId: string, apiKey: string, prompt: string): Promis
   const json = (await res.json()) as { choices?: { message?: { content?: string } }[] };
   const text = json.choices?.[0]?.message?.content;
   if (!text) throw new Error("Groq returned no content");
-  const parsed = JSON.parse(text) as { steps: StepPayload[] };
-  return parsed.steps;
+  const parsed = JSON.parse(text) as PlanPayload;
+  return { steps: parsed.steps ?? [], sections: parsed.sections };
 }
 
 // https://vite.dev/config/
@@ -378,22 +420,22 @@ export default defineConfig(({ mode }) => {
                 return;
               }
 
-              let steps: StepPayload[];
+              let plan: PlanPayload;
               if (option.provider === "gemini") {
                 if (!geminiKey) {
                   sendJson(res, 500, { error: "GEMINI_API_KEY not set in .env" });
                   return;
                 }
-                steps = await callGemini(option.id, geminiKey, prompt);
+                plan = await callGemini(option.id, geminiKey, prompt);
               } else {
                 if (!groqKey) {
                   sendJson(res, 500, { error: "GROQ_API_KEY not set in .env" });
                   return;
                 }
-                steps = await callGroq(option.id, groqKey, prompt);
+                plan = await callGroq(option.id, groqKey, prompt);
               }
 
-              sendJson(res, 200, { prompt, steps });
+              sendJson(res, 200, { prompt, steps: plan.steps, sections: plan.sections });
             } catch (err) {
               console.error("explain-api error:", err);
               sendJson(res, 502, { error: err instanceof Error ? err.message : "Explanation request failed" });

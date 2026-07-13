@@ -2,18 +2,17 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import App from './App.tsx'
-import { RenderHarness } from './components/RenderHarness'
+import { RenderHarness, BoardRenderHarness } from './components/RenderHarness'
 
-// Hidden render route for the critique loop: ?rendergraph=<base64 scene graph>
-// mounts just the real StrokePlayer in the real .scene-canvas card, so a
-// screenshot matches exactly what a student sees. Dev-only — never active in
-// a production build.
-const renderGraph = import.meta.env.DEV
-  ? new URLSearchParams(window.location.search).get('rendergraph')
-  : null
+// Hidden render routes for the critique/verification loops (dev-only):
+//   ?rendergraph=<base64 scene graph> — the real StrokePlayer in the real card.
+//   ?renderboard=<base64 lessonBoard> — the real multi-section board + camera.
+const params = import.meta.env.DEV ? new URLSearchParams(window.location.search) : null
+const renderGraph = params?.get('rendergraph') ?? null
+const renderBoard = params?.get('renderboard') ?? null
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    {renderGraph ? <RenderHarness encoded={renderGraph} /> : <App />}
+    {renderBoard ? <BoardRenderHarness encoded={renderBoard} /> : renderGraph ? <RenderHarness encoded={renderGraph} /> : <App />}
   </StrictMode>,
 )

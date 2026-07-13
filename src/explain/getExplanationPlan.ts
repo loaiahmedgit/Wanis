@@ -1,11 +1,13 @@
 import type { ExplanationPlan, ExplanationStep, ExplanationStepKind } from "./types";
 import { EXAMPLE_PLANS, findExamplePlan } from "./examples";
+import { parseLessonBoard } from "./lessonBoard";
 
 const VALID_KINDS: ExplanationStepKind[] = ["title", "text", "equation", "drawing"];
 
 interface ApiResponse {
   prompt: string;
-  steps: { kind: string; content: string }[];
+  steps?: { kind: string; content: string }[];
+  sections?: unknown[];
   error?: string;
 }
 
@@ -29,6 +31,14 @@ export async function getExplanationPlan(prompt: string, model: string): Promise
     if (!res.ok) {
       throw new Error(data?.error || `explain API returned ${res.status}`);
     }
+
+    // Additive: a multi-section lesson board routes to the composer; everything
+    // else stays on the existing single-scene step path, unchanged.
+    if (data && Array.isArray(data.sections)) {
+      const board = parseLessonBoard(data);
+      if (board) return { prompt, steps: [], board };
+    }
+
     if (!data || !Array.isArray(data.steps) || data.steps.length === 0) {
       throw new Error("explain API returned no steps");
     }

@@ -10,11 +10,28 @@ interface LineProps {
   isWriting: boolean;
 }
 
-const SIZE_BY_KIND: Record<Exclude<ExplanationStep["kind"], "drawing">, { size: number; weight: HandWeight }> = {
+export type HandKind = Exclude<ExplanationStep["kind"], "drawing">;
+
+export const SIZE_BY_KIND: Record<HandKind, { size: number; weight: HandWeight }> = {
   title: { size: 38, weight: "bold" },
   text: { size: 25, weight: "regular" },
   equation: { size: 30, weight: "bold" },
 };
+
+/**
+ * Intrinsic rendered size of a single hand-written line — the SAME math Line
+ * uses below, so the board layout and the renderer never disagree.
+ */
+export function measureHandLine(kind: HandKind, text: string): { w: number; h: number } {
+  const { size, weight } = SIZE_BY_KIND[kind];
+  const font = getHandFont(weight);
+  const baseline = size * 1.2;
+  const h = Math.ceil(size * 1.7);
+  const w = font
+    ? Math.max(16, Math.ceil(layoutGlyphs(font, text, 2, baseline, size).width) + 6)
+    : Math.max(16, Math.ceil(text.length * size * 0.55));
+  return { w, h };
+}
 
 type GlyphPhase = "idle" | "drawing" | "inked";
 

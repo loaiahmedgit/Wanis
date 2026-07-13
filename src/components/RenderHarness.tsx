@@ -1,7 +1,10 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { parseSceneGraph } from "../visual/sceneGraph";
 import { compileSceneGraph } from "../visual/compiler";
+import { parseLessonBoard } from "../explain/lessonBoard";
+import { loadHandFonts } from "../explain/handFonts";
 import { StrokePlayer } from "./StrokePlayer";
+import { LessonBoard } from "./LessonBoard";
 import "../App.css";
 
 /**
@@ -43,6 +46,31 @@ export function RenderHarness({ encoded }: { encoded: string }) {
             <p className="loading">invalid graph</p>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function decode(encoded: string): unknown | null {
+  return decodeGraph(encoded);
+}
+
+/**
+ * Hidden render route for the lesson-board composer: ?renderboard=<base64
+ * lessonBoard> mounts the REAL LessonBoard so staged screenshots capture the
+ * actual camera + persistent board a student sees.
+ */
+export function BoardRenderHarness({ encoded }: { encoded: string }) {
+  const board = useMemo(() => parseLessonBoard(decode(encoded)), [encoded]);
+  // Handwriting sections need the real fonts, exactly as App loads them.
+  const [fontsReady, setFontsReady] = useState(false);
+  useEffect(() => {
+    loadHandFonts().then(() => setFontsReady(true));
+  }, []);
+  return (
+    <div className="app-root">
+      <div className="board-wrap" data-render-target="1">
+        {board && fontsReady ? <LessonBoard board={board} planToken={1} /> : <p className="loading">…</p>}
       </div>
     </div>
   );

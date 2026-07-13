@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Board } from "./components/Board";
+import { LessonBoard } from "./components/LessonBoard";
 import { getExplanationPlan } from "./explain/getExplanationPlan";
 import { DEFAULT_PROMPT } from "./explain/examples";
 import { MODEL_OPTIONS, DEFAULT_MODEL_ID } from "./explain/models";
@@ -44,7 +45,11 @@ export default function App() {
           </p>
         )}
         {plan && fontsReady ? (
-          <Board steps={plan.steps} planToken={planToken} />
+          plan.board ? (
+            <LessonBoard board={plan.board} planToken={planToken} />
+          ) : (
+            <Board steps={plan.steps} planToken={planToken} />
+          )
         ) : (
           <p className="loading">Thinking…</p>
         )}

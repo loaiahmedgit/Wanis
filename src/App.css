@@ -45,6 +45,54 @@
   margin: 0 auto;
 }
 
+/* ---- Multi-section lesson board composer ---- */
+.lesson-board-clip {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+}
+.lesson-board {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.board-section {
+  position: absolute;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+}
+.board-section.role-sceneGraph {
+  align-items: stretch;
+}
+.board-graph {
+  width: 100%;
+  height: 100%;
+}
+.board-graph .stroke-player,
+.board-graph .stroke-player > svg {
+  width: 100%;
+  height: 100%;
+}
+.board-text {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+.board-text.board-heading {
+  align-items: center;
+}
+/* A callout is content emphasis (accent ink), not a decorative card. */
+.board-callout {
+  --ink-color: #b3541e;
+}
+.board-callout .line-glyphs {
+  stroke: #b3541e;
+}
+
 .line {
   display: flex;
 }
