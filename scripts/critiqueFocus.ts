@@ -23,7 +23,7 @@ import {
   isFocusApproved,
   type FocusFrameCritique,
 } from "../src/critique/critic";
-import { getKey, callGemini, renderFocusFrames, chromium, VISUAL_CRITIC_MODEL } from "./pipelineLib";
+import { getKey, callGemini, renderFocusFrames, chromium, VISUAL_CRITIC_MODEL, loadCache, saveCache, cacheKey, sha } from "./pipelineLib";
 
 const GRAPHS: Record<string, unknown> = {
   lever: { objects: [{ id: "lev", type: "lever", points: [
@@ -60,17 +60,31 @@ async function main() {
       return;
     }
     const key = getKey();
+    const cache = loadCache();
+    let cacheHits = 0;
     const results: FocusFrameCritique[] = [];
     for (const f of frames) {
-      const instr = f.kind === "overview" ? overviewCritiqueInstruction() : visualCritiqueInstruction();
-      const parts: unknown[] = [{ text: instr }, { text: `[${f.kind} frame: ${f.name}]` }, { inline_data: { mime_type: "image/png", data: f.png.toString("base64") } }];
-      const r = await callGemini(VISUAL_CRITIC_MODEL, key, parts, VISUAL_SCHEMA, "You are a strict visual layout reviewer.");
-      const c = parseVisualCritique(JSON.parse(r.text))!;
+      // Cache keyed by critic version + model + the exact frame PNG + its kind,
+      // so a completed frame is never re-judged and never re-spends quota.
+      const ck = cacheKey(VISUAL_CRITIC_MODEL, sha(f.png, f.kind));
+      let parsed: unknown;
+      if (cache[ck]) {
+        parsed = cache[ck];
+        cacheHits++;
+      } else {
+        const instr = f.kind === "overview" ? overviewCritiqueInstruction() : visualCritiqueInstruction();
+        const parts: unknown[] = [{ text: instr }, { text: `[${f.kind} frame: ${f.name}]` }, { inline_data: { mime_type: "image/png", data: f.png.toString("base64") } }];
+        const r = await callGemini(VISUAL_CRITIC_MODEL, key, parts, VISUAL_SCHEMA, "You are a strict visual layout reviewer.");
+        parsed = JSON.parse(r.text);
+        cache[ck] = parsed;
+        saveCache(cache);
+      }
+      const c = parseVisualCritique(parsed)!;
       results.push({ kind: f.kind, name: f.name, critique: c });
       const pass = f.kind === "overview" ? isOverviewClean(c) : isVisualApproved(c);
       console.log(`  ${pass ? "PASS" : "FAIL"} [${f.kind}] ${f.name} — clip=${c.clipping} coll=${c.collisions} leg=${c.legibility} comp=${c.composition} fit=${c.responsiveFit}`);
     }
-    console.log(`\nFOCUS APPROVED: ${isFocusApproved(results)}`);
+    console.log(`\nFOCUS APPROVED: ${isFocusApproved(results)} (${cacheHits} frame(s) served from cache)`);
   } finally {
     await browser.close();
   }

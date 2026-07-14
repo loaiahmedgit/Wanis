@@ -556,7 +556,11 @@ function deriveContainerRowFocus(
 
     const regions: FocusRegion[] = [];
     // Boundary/context — all container outlines, framing the whole enclosure.
-    regions.push({ meaning: top.label ?? "enclosure", members: containers.map((c) => c.id), startGroup: 0, endGroup: boundaryEnd, kind: "teach", bounds: boxBounds(topBox) });
+    // This is an establishing CONTEXT shot (the whole enclosure, so its labels
+    // are necessarily small); the detailed teaching is the member chunks below.
+    // Judge it contextually (structure only), like the overview — never as a
+    // strict teaching frame.
+    regions.push({ meaning: top.label ?? "enclosure", members: containers.map((c) => c.id), startGroup: 0, endGroup: boundaryEnd, kind: "overview", bounds: boxBounds(topBox) });
     // Nested member chunks in semantic (group) order.
     const leaves = graph.objects
       .filter((o) => memberSet.has(o.id) && !containerIds.has(o.id) && groupIndexOf.has(o.id) && boxes.has(o.id))
