@@ -58,6 +58,13 @@ export interface StrokeProgram {
   viewBox: [number, number, number, number];
   /** Groups play strictly in order; strokes within a group trace in order. */
   groups: StrokeGroup[];
+  /** Alternate compiler-owned geometry for a narrow portrait teaching frame. */
+  portraitVariant?: {
+    groups: StrokeGroup[];
+    focusRegions: FocusRegion[];
+    viewBox: [number, number, number, number];
+    minLabelSize: number;
+  };
   /**
    * Ordered focus regions for the semantic camera (teaching frames then a final
    * overview). Absent/empty when the scene is compact enough to read whole.

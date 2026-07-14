@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { StrokeProgram } from "../visual/strokeProgram";
 import { easeOutCubic } from "../explain/timing";
-import { decideCamera, regionViewBox, projectedLabelPx, READABLE_PX } from "../visual/focusCamera";
+import { decideCamera, regionViewBox } from "../visual/focusCamera";
 import { animateViewBox } from "../explain/sceneCamera";
 
 const CAMERA_MS = 800;
@@ -34,50 +34,86 @@ export function StrokePlayer({ program, isWriting, durationMs, enableFocusCamera
   // Index of the focus region currently framed, so a resize can re-fit it
   // without restarting playback.
   const currentRegionRef = useRef(0);
+  const [geometryKind, setGeometryKind] = useState<"default" | "portrait">("default");
+  const activeProgram = geometryKind === "portrait" && program.portraitVariant ? program.portraitVariant : program;
+  const activeGroups = activeProgram.groups;
 
-  const allStrokes = program.groups.flatMap((g) => g.strokes);
+  const allStrokes = activeGroups.flatMap((g) => g.strokes);
   const [drawnCount, setDrawnCount] = useState(isWriting ? 0 : allStrokes.length);
-  const [visibleGroups, setVisibleGroups] = useState(isWriting ? 0 : program.groups.length);
+  const [visibleGroups, setVisibleGroups] = useState(isWriting ? 0 : activeGroups.length);
   const [penPos, setPenPos] = useState<{ x: number; y: number } | null>(null);
+  const drawnCountRef = useRef(drawnCount);
+  const visibleGroupsRef = useRef(visibleGroups);
+
+  const preferredGeometry = (rendered: { w: number; h: number }): "default" | "portrait" => {
+    if (!enableFocusCamera || !program.portraitVariant || decideCamera(program, rendered) !== "focus") return "default";
+    const maxTeachWidth = Math.max(0, ...(program.focusRegions ?? []).filter((r) => r.kind === "teach").map((r) => r.bounds[2]));
+    return maxTeachWidth > rendered.w ? "portrait" : "default";
+  };
+
+  // Choose between the compiler's complete geometries from the SVG's actual
+  // CSS box, and re-evaluate when that box changes size.
+  useLayoutEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const select = () => {
+      const r = svg.getBoundingClientRect();
+      const next = preferredGeometry({ w: r.width || program.viewBox[2], h: r.height || program.viewBox[3] });
+      setGeometryKind((current) => (current === next ? current : next));
+    };
+    select();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(select);
+    observer?.observe(svg);
+    window.addEventListener("resize", select);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", select);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [program, enableFocusCamera]);
 
   useLayoutEffect(() => {
     const svg = svgRef.current;
+    const r = svg?.getBoundingClientRect();
+    if (r && preferredGeometry({ w: r.width || program.viewBox[2], h: r.height || program.viewBox[3] }) !== geometryKind) return;
     // Own the viewBox imperatively (not via a React prop) so the semantic
     // camera's per-frame setAttribute is never clobbered by a re-render.
-    if (svg) svg.setAttribute("viewBox", program.viewBox.join(" "));
+    if (svg) svg.setAttribute("viewBox", activeProgram.viewBox.join(" "));
     pathElsRef.current = svg ? Array.from(svg.querySelectorAll<SVGPathElement>(".vp-stroke")) : [];
     pathElsRef.current.forEach((el, i) => {
       const len = el.getTotalLength();
       el.style.strokeDasharray = String(len);
-      el.style.strokeDashoffset = isWriting && i >= 0 ? String(len) : "0";
+      el.style.strokeDashoffset = isWriting && i >= drawnCountRef.current ? String(len) : "0";
     });
     if (!isWriting) {
       pathElsRef.current.forEach((el) => (el.style.strokeDashoffset = "0"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [program]);
+  }, [program, geometryKind]);
 
   useEffect(() => {
     if (!isWriting) return;
     const svg = svgRef.current;
+    const initialRect = svg?.getBoundingClientRect();
+    if (
+      initialRect &&
+      preferredGeometry({ w: initialRect.width || program.viewBox[2], h: initialRect.height || program.viewBox[3] }) !== geometryKind
+    ) {
+      return;
+    }
     const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
     // Decide the semantic camera from the ACTUAL rendered size.
     const vpNow = () => {
       const r = svg?.getBoundingClientRect();
-      return { w: r?.width || program.viewBox[2], h: r?.height || program.viewBox[3] };
+      return { w: r?.width || activeProgram.viewBox[2], h: r?.height || activeProgram.viewBox[3] };
     };
-    const regions = enableFocusCamera ? program.focusRegions ?? [] : [];
-    const decision = enableFocusCamera && regions.length ? decideCamera(program, vpNow()) : "whole";
-    if (
-      enableFocusCamera &&
-      !regions.length &&
-      svg &&
-      projectedLabelPx(program, vpNow()) < READABLE_PX
-    ) {
+    const regions = enableFocusCamera ? activeProgram.focusRegions ?? [] : [];
+    const decision = enableFocusCamera ? decideCamera(activeProgram, vpNow()) : "whole";
+    if (decision === "needed-but-unavailable") {
       // Too small to read whole, but no focus regions to teach it — surface this
       // rather than let it pass as a responsive success.
-      console.warn("[perception-field] cameraNeededButUnavailable", { viewBox: program.viewBox });
+      console.warn("[perception-field] cameraNeededButUnavailable", { viewBox: activeProgram.viewBox });
     }
     const useCamera = decision === "focus";
     // A focus camera needs a STABLE display box to frame into — with height:auto
@@ -117,33 +153,38 @@ export function StrokePlayer({ program, isWriting, durationMs, enableFocusCamera
     // Draw one group's strokes (by absolute stroke index), then reveal its text.
     const strokeStart: number[] = [];
     let acc = 0;
-    for (const g of program.groups) {
+    for (const g of activeGroups) {
       strokeStart.push(acc);
       acc += g.strokes.length;
     }
     const drawGroup = async (gi: number) => {
-      const group = program.groups[gi];
-      if (!group) return;
-      let idx = strokeStart[gi];
-      for (let si = 0; si < group.strokes.length; si++) {
+      const group = activeGroups[gi];
+      if (!group || gi < visibleGroupsRef.current) return;
+      let idx = Math.max(strokeStart[gi], drawnCountRef.current);
+      for (let si = idx - strokeStart[gi]; si < group.strokes.length; si++) {
         const el = pathElsRef.current[idx];
         const len = lengths[idx] || 1;
         const dur = Math.max(160, (len / totalLen) * durationMs * 0.82);
         await traceOne(el, len, dur); // a camera move never happens mid-stroke
         if (cancelled) return;
         idx++;
+        drawnCountRef.current = idx;
         setDrawnCount(idx);
       }
+      visibleGroupsRef.current = Math.max(visibleGroupsRef.current, gi + 1);
       setVisibleGroups(gi + 1);
     };
 
     const play = async () => {
       if (useCamera) {
-        let curVB = regionViewBox(regions[0], vpNow());
+        const nextGroup = Math.min(visibleGroupsRef.current, Math.max(0, activeGroups.length - 1));
+        const foundRegion = regions.findIndex((region) => region.endGroup >= nextGroup);
+        const startRegion = foundRegion < 0 ? regions.length - 1 : foundRegion;
+        let curVB = regionViewBox(regions[startRegion], vpNow());
         svg?.setAttribute("viewBox", curVB.join(" "));
-        for (let ri = 0; ri < regions.length; ri++) {
+        for (let ri = startRegion; ri < regions.length; ri++) {
           currentRegionRef.current = ri;
-          if (ri > 0) {
+          if (ri > startRegion) {
             // Camera moves only BETWEEN frames, at a group boundary.
             const target = regionViewBox(regions[ri], vpNow());
             if (reduceMotion || cancelled) svg?.setAttribute("viewBox", target.join(" "));
@@ -161,7 +202,7 @@ export function StrokePlayer({ program, isWriting, durationMs, enableFocusCamera
           if (cancelled) return;
         }
       } else {
-        for (let gi = 0; gi < program.groups.length; gi++) {
+        for (let gi = Math.min(visibleGroupsRef.current, activeGroups.length); gi < activeGroups.length; gi++) {
           await drawGroup(gi);
           if (cancelled) return;
           await wait(reduceMotion ? 0 : 180);
@@ -174,8 +215,10 @@ export function StrokePlayer({ program, isWriting, durationMs, enableFocusCamera
     if (reduceMotion && !useCamera) {
       // No focus needed: snap the whole scene to final immediately (unchanged).
       pathElsRef.current.forEach((el) => (el.style.strokeDashoffset = "0"));
+      drawnCountRef.current = allStrokes.length;
+      visibleGroupsRef.current = activeGroups.length;
       setDrawnCount(allStrokes.length);
-      setVisibleGroups(program.groups.length);
+      setVisibleGroups(activeGroups.length);
       return;
     }
 
@@ -191,11 +234,11 @@ export function StrokePlayer({ program, isWriting, durationMs, enableFocusCamera
       window.removeEventListener("resize", onResize);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isWriting, program, durationMs, enableFocusCamera]);
+  }, [isWriting, program, geometryKind, durationMs, enableFocusCamera]);
 
   // Pen position is in program (viewBox) coordinates; convert to a % of the
   // rendered SVG so the emoji overlay lines up regardless of scaling.
-  const [vbX, vbY, vbW, vbH] = program.viewBox;
+  const [vbX, vbY, vbW, vbH] = activeProgram.viewBox;
   const penLeft = penPos ? ((penPos.x - vbX) / vbW) * 100 : 0;
   const penTop = penPos ? ((penPos.y - vbY) / vbH) * 100 : 0;
 
@@ -203,18 +246,18 @@ export function StrokePlayer({ program, isWriting, durationMs, enableFocusCamera
   return (
     <div className="stroke-player">
       <svg ref={svgRef} width="100%" preserveAspectRatio="xMidYMid meet">
-        {program.groups.map((group) =>
+        {activeGroups.map((group) =>
           group.strokes.map((s) => {
             const key = idx;
             idx++;
-            return <path key={key} d={s.d} className={`vp-stroke ${s.css}`} />;
+            return <path key={`${geometryKind}-${key}`} d={s.d} className={`vp-stroke ${s.css}`} />;
           }),
         )}
-        {program.groups.map((group, gi) =>
+        {activeGroups.map((group, gi) =>
           gi < visibleGroups
             ? group.texts.map((t, ti) => (
                 <text
-                  key={`t${gi}-${ti}`}
+                  key={`${geometryKind}-t${gi}-${ti}`}
                   x={t.x}
                   y={t.y}
                   textAnchor={t.anchor ?? "middle"}

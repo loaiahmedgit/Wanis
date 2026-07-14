@@ -10,7 +10,7 @@
  * (MagicGeo-style) is the upgrade path if relational constraints outgrow
  * this — don't start there.
  */
-import type { SceneGraph, SceneObject, Constraint, ContainerObject, LeverObject } from "./sceneGraph";
+import type { SceneGraph, SceneObject, Constraint, ContainerObject, LeverObject, CycleObject, ArrowObject } from "./sceneGraph";
 import type { StrokeProgram, StrokeGroup, StrokeItem, TextItem, FocusRegion } from "./strokeProgram";
 
 interface Box {
@@ -527,6 +527,224 @@ function unionBoxBounds(bs: Box[]): [number, number, number, number] {
   return [x, y, r - x, bt - y];
 }
 
+function includeTextBounds(bounds: [number, number, number, number], texts: TextItem[]): [number, number, number, number] {
+  let [x0, y0, w, h] = bounds;
+  let x1 = x0 + w;
+  let y1 = y0 + h;
+  for (const t of texts) {
+    const tb = textBounds(t);
+    x0 = Math.min(x0, tb.l);
+    y0 = Math.min(y0, tb.t);
+    x1 = Math.max(x1, tb.r);
+    y1 = Math.max(y1, tb.b);
+  }
+  return [x0, y0, x1 - x0, y1 - y0];
+}
+
+function cycleMemberArt(o: SceneObject, box: Box): { strokes: StrokeItem[]; texts: TextItem[] } {
+  const strokes: StrokeItem[] = [];
+  const texts: TextItem[] = [];
+  if (o.type === "box") {
+    strokes.push({ d: roundedRectPath(box, 10), css: "vp-outline" });
+    if (o.label) {
+      const c = center(box);
+      texts.push({ x: c.x, y: c.y + 5, text: o.label, css: "vp-label", anchor: "middle" });
+    }
+  } else if (o.type === "circleShape") {
+    const c = center(box);
+    strokes.push({ d: circlePath(c.x, c.y, box.w / 2), css: "vp-outline" });
+    if (o.label) texts.push({ x: c.x, y: box.y + box.h + 22, text: o.label, css: "vp-label", anchor: "middle" });
+  } else if (o.type === "unitCircle") {
+    const c = center(box);
+    const r = box.w / 2 - 20;
+    strokes.push({ d: `M ${box.x} ${c.y} L ${box.x + box.w} ${c.y}`, css: "vp-axis" });
+    strokes.push({ d: `M ${c.x} ${box.y} L ${c.x} ${box.y + box.h}`, css: "vp-axis" });
+    strokes.push({ d: circlePath(c.x, c.y, r), css: "vp-primary" });
+  } else if (o.type === "waveGraph") {
+    const originX = box.x + 14;
+    const midY = box.y + box.h / 2;
+    const amp = box.h / 2 - 24;
+    strokes.push({ d: `M ${originX} ${box.y} L ${originX} ${box.y + box.h}`, css: "vp-axis" });
+    strokes.push({ d: `M ${box.x} ${midY} L ${box.x + box.w} ${midY}`, css: "vp-axis" });
+    const pts: string[] = [];
+    const thetaMax = o.cycles * Math.PI * 2;
+    const width = box.w - 24;
+    for (let i = 0; i <= 90; i++) {
+      const t = (i / 90) * thetaMax;
+      const x = originX + (t / thetaMax) * width;
+      const v = o.fn === "sin" ? Math.sin(t) : Math.cos(t);
+      pts.push(`${x.toFixed(1)} ${(midY - amp * v).toFixed(1)}`);
+    }
+    strokes.push({ d: `M ${pts.join(" L ")}`, css: "vp-primary" });
+    texts.push({ x: originX + 8, y: box.y + 14, text: `y = ${o.fn}(theta)`, css: "vp-label", anchor: "start" });
+  }
+  return { strokes, texts };
+}
+
+/** A cycle split into camera-owned context, transition, branch, and overview groups. */
+function computeCycle(o: CycleObject, graph: SceneGraph, boxes: Map<string, Box>): { groups: SubGroup[]; focus: RawFocus[]; focusAvailable: boolean } {
+  const objectById = new Map(graph.objects.map((obj) => [obj.id, obj] as const));
+  const members = o.members
+    .map((id) => {
+      const object = objectById.get(id);
+      const box = boxes.get(id);
+      return object && box ? { id, object, box, art: cycleMemberArt(object, box) } : null;
+    })
+    .filter((item): item is NonNullable<typeof item> => item !== null);
+  const groups: SubGroup[] = [];
+  const focus: RawFocus[] = [];
+  if (members.length < 2) return { groups, focus, focusAvailable: false };
+
+  const memberSet = new Set(members.map((m) => m.id));
+  const indexOf = new Map(members.map((m, i) => [m.id, i] as const));
+  const ringC = {
+    x: members.reduce((sum, m) => sum + center(m.box).x, 0) / members.length,
+    y: members.reduce((sum, m) => sum + center(m.box).y, 0) / members.length,
+  };
+  const wholeBounds = unionBoxBounds(members.map((m) => m.box));
+  const context: SubGroup = {
+    meaning: o.label ?? "cycle context",
+    members: members.map((m) => m.id),
+    strokes: members.flatMap((m) => m.art.strokes),
+    texts: members.flatMap((m) => m.art.texts),
+  };
+  if (o.label) context.texts.push({ x: ringC.x, y: ringC.y, text: o.label, css: "vp-label", anchor: "middle" });
+  groups.push(context);
+  focus.push({
+    meaning: context.meaning,
+    members: context.members,
+    groupStart: 0,
+    groupCount: 1,
+    bounds: includeTextBounds(wholeBounds, context.texts),
+    kind: "overview",
+  });
+
+  for (let i = 0; i < members.length; i++) {
+    const from = members[i];
+    const to = members[(i + 1) % members.length];
+    const cf = center(from.box);
+    const ct = center(to.box);
+    const p1 = anchorOnBoxEdge(from.box, ct);
+    const p2 = anchorOnBoxEdge(to.box, cf);
+    const mx = (p1.x + p2.x) / 2;
+    const my = (p1.y + p2.y) / 2;
+    const ox = mx - ringC.x;
+    const oy = my - ringC.y;
+    const olen = Math.hypot(ox, oy) || 1;
+    const bow = 26;
+    const ctrl = { x: mx + (ox / olen) * bow, y: my + (oy / olen) * bow };
+    const transition: SubGroup = {
+      meaning: `${from.id} -> ${to.id}`,
+      members: [from.id, to.id],
+      strokes: [
+        { d: `M ${p1.x} ${p1.y} Q ${ctrl.x} ${ctrl.y} ${p2.x} ${p2.y}`, css: "vp-primary" },
+        { d: arrowHeadPath(p2.x, p2.y, Math.atan2(p2.y - ctrl.y, p2.x - ctrl.x)), css: "vp-primary" },
+      ],
+      texts: [],
+    };
+    const label = o.transitions?.find((t) => t.from === from.id && t.to === to.id)?.label;
+    if (label) {
+      transition.texts.push({
+        x: mx + (ox / olen) * (bow + 16),
+        y: my + (oy / olen) * (bow + 16),
+        text: label,
+        css: "vp-label",
+        anchor: "middle",
+      });
+    }
+    groups.push(transition);
+    focus.push({
+      meaning: transition.meaning,
+      members: transition.members,
+      groupStart: groups.length - 1,
+      groupCount: 1,
+      bounds: includeTextBounds(unionBoxBounds([from.box, to.box]), [...from.art.texts, ...to.art.texts, ...transition.texts]),
+      kind: "teach",
+    });
+  }
+
+  const branches = graph.objects.filter(
+    (obj): obj is ArrowObject => obj.type === "arrowBetween" && memberSet.has(obj.from) && memberSet.has(obj.to),
+  );
+  let focusAvailable = true;
+  for (const branch of branches) {
+    const from = members[indexOf.get(branch.from)!];
+    const to = members[indexOf.get(branch.to)!];
+    const p1 = anchorOnBoxEdge(from.box, center(to.box));
+    const p2 = anchorOnBoxEdge(to.box, center(from.box));
+    const mx = (p1.x + p2.x) / 2;
+    const my = (p1.y + p2.y) / 2;
+    const rx = mx - ringC.x;
+    const ry = my - ringC.y;
+    const rlen = Math.hypot(rx, ry);
+    const dIdx = Math.abs(indexOf.get(branch.from)! - indexOf.get(branch.to)!);
+    const adjacent = dIdx === 1 || dIdx === members.length - 1;
+    // Non-adjacent endpoints span the ring rather than a local teaching window.
+    // Withhold the cycle's regions so an unreadable mobile scene follows the
+    // normal needed-but-unavailable decision and warning path.
+    if (!adjacent) focusAvailable = false;
+
+    let cx: number;
+    let cy: number;
+    let lx: number;
+    let ly: number;
+    if (adjacent && rlen > 1) {
+      const ux = rx / rlen;
+      const uy = ry / rlen;
+      const bow = 34;
+      cx = mx - ux * bow;
+      cy = my - uy * bow;
+      lx = mx - ux * (bow + 16);
+      ly = my - uy * (bow + 16);
+    } else {
+      const dx = p2.x - p1.x;
+      const dy = p2.y - p1.y;
+      const dlen = Math.hypot(dx, dy) || 1;
+      let px = -dy / dlen;
+      let py = dx / dlen;
+      if (px * rx + py * ry < 0) {
+        px = -px;
+        py = -py;
+      }
+      const bow = 52;
+      cx = mx + px * bow;
+      cy = my + py * bow;
+      lx = mx + px * (bow + 16);
+      ly = my + py * (bow + 16);
+    }
+    const branchGroup: SubGroup = {
+      meaning: `branch ${branch.from} -> ${branch.to}`,
+      members: [branch.from, branch.id, branch.to],
+      strokes: [
+        { d: `M ${p1.x} ${p1.y} Q ${cx} ${cy} ${p2.x} ${p2.y}`, css: "vp-primary" },
+        { d: arrowHeadPath(p2.x, p2.y, Math.atan2(p2.y - cy, p2.x - cx)), css: "vp-primary" },
+      ],
+      texts: branch.label ? [{ x: lx, y: ly, text: branch.label, css: "vp-label", anchor: "middle" }] : [],
+    };
+    groups.push(branchGroup);
+    focus.push({
+      meaning: branchGroup.meaning,
+      members: branchGroup.members,
+      groupStart: groups.length - 1,
+      groupCount: 1,
+      bounds: includeTextBounds(unionBoxBounds([from.box, to.box]), [...from.art.texts, ...to.art.texts, ...branchGroup.texts]),
+      kind: "teach",
+    });
+  }
+
+  const overview: SubGroup = { meaning: "whole cycle", members: members.map((m) => m.id), strokes: [], texts: [] };
+  groups.push(overview);
+  focus.push({
+    meaning: overview.meaning,
+    members: overview.members,
+    groupStart: groups.length - 1,
+    groupCount: 1,
+    bounds: includeTextBounds(wholeBounds, context.texts),
+    kind: "overview",
+  });
+  return { groups, focus, focusAvailable };
+}
+
 /**
  * Focus regions for a CONTAINER (boundary/context first, then nested member
  * chunks in semantic order, then overview) or a wide ROW (frame each adjacent
@@ -539,7 +757,11 @@ function deriveContainerRowFocus(
   groups: StrokeGroup[],
   boxes: Map<string, Box>,
   groupIndexOf: Map<string, number>,
-): { groups: StrokeGroup[]; focusRegions: FocusRegion[] } | null {
+): {
+  groups: StrokeGroup[];
+  focusRegions: FocusRegion[];
+  portraitVariant?: NonNullable<StrokeProgram["portraitVariant"]>;
+} | null {
   const containers = graph.objects.filter((o) => o.type === "container");
   if (containers.length) {
     const memberSet = new Set<string>();
@@ -581,7 +803,7 @@ function deriveContainerRowFocus(
 
   // ROW: >=3 boxes in a horizontal chain connected by arrows.
   const boxObjs = graph.objects.filter((o) => o.type === "box");
-  const arrows = graph.objects.filter((o) => o.type === "arrowBetween") as { id: string; from: string; to: string; label?: string }[];
+  const arrows = graph.objects.filter((o): o is ArrowObject => o.type === "arrowBetween");
   if (boxObjs.length < 3 || arrows.length < boxObjs.length - 1) return null;
   const ordered = boxObjs
     .map((o) => ({ id: o.id, box: boxes.get(o.id) }))
@@ -590,7 +812,7 @@ function deriveContainerRowFocus(
   const ys = ordered.map((x) => x.box.y + x.box.h / 2);
   if (Math.max(...ys) - Math.min(...ys) > 40) return null; // not a clean horizontal row
   const pairArrow = (a: string, b: string) => arrows.find((ar) => (ar.from === a && ar.to === b) || (ar.from === b && ar.to === a));
-  const chain: { id: string }[] = [];
+  const chain: ArrowObject[] = [];
   for (let i = 0; i < ordered.length - 1; i++) {
     const ar = pairArrow(ordered[i].id, ordered[i + 1].id);
     if (!ar) return null;
@@ -599,11 +821,13 @@ function deriveContainerRowFocus(
 
   // Interleave groups: box0, arrow01, box1, arrow12, box2, ... then leftovers.
   const newGroups: StrokeGroup[] = [];
+  const newIds: string[] = [];
   const newIndex = new Map<string, number>();
   const push = (id: string) => {
     const gi = groupIndexOf.get(id);
     if (gi === undefined || newIndex.has(id)) return;
     newIndex.set(id, newGroups.length);
+    newIds.push(id);
     newGroups.push(groups[gi]);
   };
   push(ordered[0].id);
@@ -627,7 +851,100 @@ function deriveContainerRowFocus(
   }
   const lastWindowEnd = newIndex.get(ordered[ordered.length - 1].id)!;
   regions.push({ meaning: "overview", members: ordered.map((x) => x.id), startGroup: lastWindowEnd + 1, endGroup: newGroups.length - 1, kind: "overview", bounds: unionBoxBounds(ordered.map((x) => x.box)) });
-  return { groups: newGroups, focusRegions: regions };
+
+  // A portrait row is a separate compiler-owned geometry, not a transform of
+  // the horizontal paths. Keep the exact reordered group sequence and replace
+  // each row object's art with paths/text positioned on a vertical stack.
+  const rowIds = new Set(ordered.map((x) => x.id));
+  const objectById = new Map(graph.objects.map((o) => [o.id, o] as const));
+  const canBuildPortrait =
+    chain.every((ar, i) => ar.from === ordered[i].id && ar.to === ordered[i + 1].id) &&
+    newIds.every((id) => {
+      const o = objectById.get(id);
+      if (!o) return false;
+      if (o.type === "box") return rowIds.has(o.id);
+      if (o.type === "arrowBetween") return rowIds.has(o.from) && rowIds.has(o.to);
+      return o.type === "label" && rowIds.has(o.near);
+    });
+
+  if (!canBuildPortrait) return { groups: newGroups, focusRegions: regions };
+
+  const widest = Math.max(...ordered.map((x) => x.box.w));
+  const verticalBoxes = new Map<string, Box>();
+  let y = 0;
+  for (const item of ordered) {
+    verticalBoxes.set(item.id, { x: (widest - item.box.w) / 2, y, w: item.box.w, h: item.box.h });
+    y += item.box.h + GAP;
+  }
+
+  const portraitGroups = newIds.map((id, gi): StrokeGroup => {
+    const original = newGroups[gi];
+    const o = objectById.get(id)!;
+    const strokes: StrokeItem[] = [];
+    const texts: TextItem[] = [];
+
+    if (o.type === "box") {
+      const b = verticalBoxes.get(o.id)!;
+      strokes.push({ d: roundedRectPath(b, 10), css: "vp-outline" });
+      if (o.label) {
+        const c = center(b);
+        texts.push({ x: c.x, y: c.y + 5, text: o.label, css: "vp-label", anchor: "middle" });
+      }
+    } else if (o.type === "arrowBetween") {
+      const from = verticalBoxes.get(o.from)!;
+      const to = verticalBoxes.get(o.to)!;
+      const p1 = anchorOnBoxEdge(from, center(to));
+      const p2 = anchorOnBoxEdge(to, center(from));
+      strokes.push({ d: `M ${p1.x} ${p1.y} L ${p2.x} ${p2.y}`, css: "vp-primary" });
+      strokes.push({ d: arrowHeadPath(p2.x, p2.y, Math.atan2(p2.y - p1.y, p2.x - p1.x)), css: "vp-primary" });
+      if (o.label) {
+        texts.push({ x: (p1.x + p2.x) / 2 + 18, y: (p1.y + p2.y) / 2 + 5, text: o.label, css: "vp-label", anchor: "start" });
+      }
+    } else if (o.type === "label") {
+      const b = verticalBoxes.get(o.near)!;
+      const p = center(b);
+      const placement = o.placement ?? "below";
+      let tx = p.x;
+      let ty = p.y;
+      let anchorPos: TextItem["anchor"] = "middle";
+      if (placement === "below") ty = p.y + b.h / 2 + 24;
+      else if (placement === "above") ty = p.y - b.h / 2 - 12;
+      else if (placement === "left") {
+        tx = p.x - b.w / 2 - 10;
+        anchorPos = "end";
+      } else {
+        tx = p.x + b.w / 2 + 10;
+        anchorPos = "start";
+      }
+      texts.push({ x: tx, y: ty, text: o.text, css: "vp-label", anchor: anchorPos });
+    }
+
+    return { ...original, strokes, texts };
+  });
+
+  const portraitRegions = regions.map((region, i): FocusRegion => {
+    const bounds =
+      i < ordered.length - 1
+        ? unionBoxBounds([verticalBoxes.get(ordered[i].id)!, verticalBoxes.get(ordered[i + 1].id)!])
+        : unionBoxBounds([...verticalBoxes.values()]);
+    const ownedTexts: TextItem[] = [];
+    for (let gi = region.startGroup; gi <= region.endGroup; gi++) ownedTexts.push(...(portraitGroups[gi]?.texts ?? []));
+    return { ...region, bounds: includeTextBounds(bounds, ownedTexts) };
+  });
+  const overview = portraitRegions[portraitRegions.length - 1];
+  overview.bounds = includeTextBounds(overview.bounds, portraitGroups.flatMap((g) => g.texts));
+  const [px, py, pw, ph] = overview.bounds;
+
+  return {
+    groups: newGroups,
+    focusRegions: regions,
+    portraitVariant: {
+      groups: portraitGroups,
+      focusRegions: portraitRegions,
+      viewBox: [px - MARGIN, py - MARGIN, pw + MARGIN * 2, ph + MARGIN * 2],
+      minLabelSize: LABEL_FONT_UNITS,
+    },
+  };
 }
 
 /** Where "the point" of an object lives, for projections/arrows to target. */
@@ -651,6 +968,8 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   if (!boxes.size) return null;
   const groups: StrokeGroup[] = [];
   const focusRegions: FocusRegion[] = [];
+  let portraitVariant: NonNullable<StrokeProgram["portraitVariant"]> | undefined;
+  let focusUnavailable = false;
   const groupIndexOf = new Map<string, number>();
 
   // Draw order (the StrokePlayer inks groups in sequence): container boundaries
@@ -701,63 +1020,39 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
       if (boxes.get(id)) ringMember.set(id, { cycleId: o.id, ringC, idx, n });
     });
   }
+  const cycleOwnedIds = new Set<string>();
+  for (const o of graph.objects) {
+    if (o.type === "cycle") o.members.forEach((id) => cycleOwnedIds.add(id));
+    else if (o.type === "arrowBetween") {
+      const rf = ringMember.get(o.from);
+      const rt = ringMember.get(o.to);
+      if (rf && rt && rf.cycleId === rt.cycleId) cycleOwnedIds.add(o.id);
+    }
+  }
 
   for (const o of emitOrder) {
+    if (cycleOwnedIds.has(o.id)) continue;
     const strokes: StrokeItem[] = [];
     const texts: TextItem[] = [];
     const box = boxes.get(o.id);
 
     if (o.type === "cycle") {
-      // The member boxes are emitted by their own object entries; the cycle
-      // emits only the connecting arrows (consecutive, closing last->first)
-      // and an optional center label. Arrows bow slightly outward from the
-      // ring center so they read as an arc, not a chord across the middle.
-      const memberBoxes = o.members.map((id) => boxes.get(id)).filter((b): b is Box => !!b);
-      const n = memberBoxes.length;
-      if (n >= 2) {
-        let sumX = 0;
-        let sumY = 0;
-        for (const b of memberBoxes) {
-          const c = center(b);
-          sumX += c.x;
-          sumY += c.y;
+      const cycle = computeCycle(o, graph, boxes);
+      const base = groups.length;
+      groupIndexOf.set(o.id, base);
+      for (const sg of cycle.groups) groups.push({ meaning: sg.meaning, strokes: sg.strokes, texts: sg.texts });
+      if (cycle.focusAvailable) {
+        for (const f of cycle.focus) {
+          focusRegions.push({
+            bounds: f.bounds,
+            members: f.members,
+            startGroup: base + f.groupStart,
+            endGroup: base + f.groupStart + f.groupCount - 1,
+            kind: f.kind,
+            meaning: f.meaning,
+          });
         }
-        const ringC = { x: sumX / n, y: sumY / n };
-        for (let i = 0; i < n; i++) {
-          const from = memberBoxes[i];
-          const to = memberBoxes[(i + 1) % n];
-          const cf = center(from);
-          const ct = center(to);
-          const p1 = anchorOnBoxEdge(from, ct);
-          const p2 = anchorOnBoxEdge(to, cf);
-          // Control point: midpoint pushed outward from the ring center.
-          const mx = (p1.x + p2.x) / 2;
-          const my = (p1.y + p2.y) / 2;
-          const ox = mx - ringC.x;
-          const oy = my - ringC.y;
-          const olen = Math.hypot(ox, oy) || 1;
-          const bow = 26;
-          const ctrl = { x: mx + (ox / olen) * bow, y: my + (oy / olen) * bow };
-          strokes.push({ d: `M ${p1.x} ${p1.y} Q ${ctrl.x} ${ctrl.y} ${p2.x} ${p2.y}`, css: "vp-primary" });
-          const headAngle = Math.atan2(p2.y - ctrl.y, p2.x - ctrl.x);
-          strokes.push({ d: arrowHeadPath(p2.x, p2.y, headAngle), css: "vp-primary" });
-
-          // Optional transition label, placed just outside this arrow's arc.
-          const fromId = o.members[i];
-          const toId = o.members[(i + 1) % n];
-          const tr = o.transitions?.find((t) => t.from === fromId && t.to === toId);
-          if (tr) {
-            texts.push({
-              x: mx + (ox / olen) * (bow + 16),
-              y: my + (oy / olen) * (bow + 16),
-              text: tr.label,
-              css: "vp-label",
-              anchor: "middle",
-            });
-          }
-        }
-        if (o.label) texts.push({ x: ringC.x, y: ringC.y, text: o.label, css: "vp-label", anchor: "middle" });
-      }
+      } else focusUnavailable = true;
     } else if (o.type === "container" && box) {
       const c = center(box);
       let labelY = box.y + 21; // box: inside the reserved top band
@@ -960,11 +1255,11 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   }
 
   if (!groups.length) return null;
+  if (focusUnavailable) focusRegions.length = 0;
 
-  // If no construct emitted its own focus regions (only the lever does), try to
-  // derive them for a container or a wide row so the semantic camera can teach
-  // the scene region-by-region on a small viewport.
-  if (!focusRegions.length) {
+  // If no construct emitted its own focus regions, try to derive them for a
+  // container or a wide row so the camera can teach the scene region-by-region.
+  if (!focusRegions.length && !focusUnavailable) {
     const derived = deriveContainerRowFocus(graph, groups, boxes, groupIndexOf);
     if (derived) {
       // The row path returns a reordered NEW array; the container path returns
@@ -975,6 +1270,7 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
         groups.push(...reordered);
       }
       focusRegions.push(...derived.focusRegions);
+      portraitVariant = derived.portraitVariant;
     }
   }
 
@@ -982,26 +1278,30 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   // (an object's own label + a separate label targeting it, or an arrow
   // label crossing a node label), which the layout can't foresee. Nudge
   // overlapping text items apart vertically so none stack on each other.
-  const allTexts = groups.flatMap((g) => g.texts);
   const overlaps = (a: TextItem, b: TextItem) => {
     const ba = textBounds(a);
     const bb = textBounds(b);
     return ba.l < bb.r && ba.r > bb.l && ba.t < bb.b && ba.b > bb.t;
   };
-  // Process in reading order (top-to-bottom); push any colliding later text down.
-  allTexts.sort((a, b) => a.y - b.y || a.x - b.x);
-  for (let i = 0; i < allTexts.length; i++) {
-    for (let pass = 0; pass < 6; pass++) {
-      let moved = false;
-      for (let j = 0; j < i; j++) {
-        if (overlaps(allTexts[i], allTexts[j])) {
-          allTexts[i].y = textBounds(allTexts[j]).b + 15;
-          moved = true;
+  const deCollideTexts = (targetGroups: StrokeGroup[]) => {
+    const allTexts = targetGroups.flatMap((g) => g.texts);
+    // Process in reading order (top-to-bottom); push any colliding later text down.
+    allTexts.sort((a, b) => a.y - b.y || a.x - b.x);
+    for (let i = 0; i < allTexts.length; i++) {
+      for (let pass = 0; pass < 6; pass++) {
+        let moved = false;
+        for (let j = 0; j < i; j++) {
+          if (overlaps(allTexts[i], allTexts[j])) {
+            allTexts[i].y = textBounds(allTexts[j]).b + 15;
+            moved = true;
+          }
         }
+        if (!moved) break;
       }
-      if (!moved) break;
     }
-  }
+  };
+  deCollideTexts(groups);
+  if (portraitVariant) deCollideTexts(portraitVariant.groups);
 
   // Overall bounding box -> viewBox with margin. Computed from the layout
   // boxes and anchor points, NOT by parsing numbers out of emitted path
@@ -1039,28 +1339,29 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   // Expand each focus region to include the ACTUAL text extents drawn in its
   // groups (using final, de-collided positions) so a teaching frame never clips
   // a label at its edge.
-  for (const r of focusRegions) {
-    let rx0 = r.bounds[0];
-    let ry0 = r.bounds[1];
-    let rx1 = r.bounds[0] + r.bounds[2];
-    let ry1 = r.bounds[1] + r.bounds[3];
-    for (let gi = r.startGroup; gi <= r.endGroup; gi++) {
-      const g = groups[gi];
-      if (!g) continue;
-      for (const t of g.texts) {
-        const tb = textBounds(t);
-        rx0 = Math.min(rx0, tb.l);
-        ry0 = Math.min(ry0, tb.t);
-        rx1 = Math.max(rx1, tb.r);
-        ry1 = Math.max(ry1, tb.b);
+  const expandFocusText = (targetGroups: StrokeGroup[], regions: FocusRegion[]) => {
+    for (const r of regions) {
+      const texts: TextItem[] = [];
+      for (let gi = r.startGroup; gi <= r.endGroup; gi++) {
+        const g = targetGroups[gi];
+        if (g) texts.push(...g.texts);
       }
+      r.bounds = includeTextBounds(r.bounds, texts);
     }
-    r.bounds = [rx0, ry0, rx1 - rx0, ry1 - ry0];
+  };
+  expandFocusText(groups, focusRegions);
+  if (portraitVariant) {
+    expandFocusText(portraitVariant.groups, portraitVariant.focusRegions);
+    const overview = portraitVariant.focusRegions[portraitVariant.focusRegions.length - 1];
+    overview.bounds = includeTextBounds(overview.bounds, portraitVariant.groups.flatMap((g) => g.texts));
+    const [x, y, w, h] = overview.bounds;
+    portraitVariant.viewBox = [x - MARGIN, y - MARGIN, w + MARGIN * 2, h + MARGIN * 2];
   }
 
   return {
     viewBox: [minX - MARGIN, minY - MARGIN, maxX - minX + MARGIN * 2, maxY - minY + MARGIN * 2],
     groups,
+    ...(portraitVariant ? { portraitVariant } : {}),
     ...(focusRegions.length ? { focusRegions, minLabelSize: LABEL_FONT_UNITS } : {}),
   };
 }
