@@ -129,7 +129,7 @@ function SectionView({ m, isWriting, planToken }: { m: Measured; isWriting: bool
   if (s.role === "sceneGraph" && s.program) {
     return (
       <div className="board-graph">
-        <StrokePlayer program={s.program} isWriting={isWriting} durationMs={graphDurationMs(s.program)} />
+        <StrokePlayer program={s.program} isWriting={isWriting} durationMs={graphDurationMs(s.program)} enableFocusCamera={false} />
       </div>
     );
   }

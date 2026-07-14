@@ -31,6 +31,9 @@ export function RenderHarness({ encoded }: { encoded: string }) {
     const graph = parseSceneGraph(raw);
     return graph ? compileSceneGraph(graph) : null;
   }, [encoded]);
+  // ?rendergraph=..&anim=1 plays the scene (so the semantic camera runs) for
+  // deterministic gate screenshots; default renders the finished whole state.
+  const anim = new URLSearchParams(window.location.search).get("anim") === "1";
 
   return (
     <div className="app-root">
@@ -39,11 +42,11 @@ export function RenderHarness({ encoded }: { encoded: string }) {
           {program ? (
             <div className="drawing">
               <div className="scene-canvas" data-render-target="1">
-                <StrokePlayer program={program} isWriting={false} durationMs={1} />
+                <StrokePlayer program={program} isWriting={anim} durationMs={anim ? 5000 : 1} />
               </div>
             </div>
           ) : (
-            <p className="loading">invalid graph</p>
+            <p className="loading">…</p>
           )}
         </div>
       </div>

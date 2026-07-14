@@ -9,6 +9,7 @@ import { createHash } from "node:crypto";
 import { chromium, type Browser } from "playwright";
 import { parseSceneGraph, type SceneGraph } from "../src/visual/sceneGraph";
 import { compileSceneGraph } from "../src/visual/compiler";
+import { regionViewBox } from "../src/visual/focusCamera";
 import type { StrokeProgram } from "../src/visual/strokeProgram";
 
 /**
@@ -288,6 +289,73 @@ export function validate(raw: unknown): { graph: SceneGraph; program: StrokeProg
   const program = compileSceneGraph(graph);
   if (!program) return null;
   return { graph, program };
+}
+
+export interface FocusFrameRender {
+  name: string;
+  kind: "teach" | "overview";
+  png: Buffer;
+}
+
+/**
+ * Render each semantic-camera focus frame separately at a mobile viewport (the
+ * actual teaching frames + the contextual overview), by loading the real scene
+ * and setting the SVG's fixed camera box + each region's computed viewBox — the
+ * same framing the runtime applies. Returns [] when the program has no focus
+ * regions (nothing to teach frame-by-frame). Lets the critic judge teaching
+ * frames strictly and the overview contextually.
+ */
+export async function renderFocusFrames(browser: Browser, graphRaw: unknown): Promise<FocusFrameRender[]> {
+  const v = validate(graphRaw);
+  const regions = v?.program.focusRegions ?? [];
+  if (!v || !regions.length) return [];
+  const enc = encodeGraph(v.graph);
+  const out: FocusFrameRender[] = [];
+  const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+  try {
+    await page.goto(`${APP}/?rendergraph=${encodeURIComponent(enc)}`, { waitUntil: "networkidle", timeout: 15000 });
+    const el = await page.waitForSelector('[data-render-target="1"]', { timeout: 8000 });
+    await page.evaluate(() => (document as Document).fonts.ready);
+    // Fix the SVG box exactly as the runtime does while focusing.
+    await page.evaluate(() => {
+      const s = document.querySelector<SVGSVGElement>(".scene-canvas svg");
+      if (s) s.style.height = "min(70vh, 620px)";
+    });
+    // Cumulative stroke/text counts through each group, so a frame can show only
+    // what the learner has actually drawn by that point (groups <= endGroup) —
+    // never strokes from a later frame bleeding into an earlier crop.
+    const strokeThrough: number[] = [];
+    const textThrough: number[] = [];
+    let sAcc = 0;
+    let tAcc = 0;
+    for (const g of v.program.groups) {
+      sAcc += g.strokes.length;
+      tAcc += g.texts.length;
+      strokeThrough.push(sAcc);
+      textThrough.push(tAcc);
+    }
+    for (const r of regions) {
+      const rect = await page.evaluate(() => {
+        const b = document.querySelector<SVGSVGElement>(".scene-canvas svg")?.getBoundingClientRect();
+        return { w: b?.width ?? 300, h: b?.height ?? 480 };
+      });
+      const vb = regionViewBox(r, rect);
+      await page.evaluate(
+        (arg: { vb: number[]; sCut: number; tCut: number }) => {
+          const s = document.querySelector<SVGSVGElement>(".scene-canvas svg");
+          if (s) s.setAttribute("viewBox", arg.vb.join(" "));
+          document.querySelectorAll<SVGElement>(".vp-stroke").forEach((p, i) => (p.style.visibility = i < arg.sCut ? "visible" : "hidden"));
+          document.querySelectorAll<SVGElement>(".vp-text").forEach((t, i) => (t.style.visibility = i < arg.tCut ? "visible" : "hidden"));
+        },
+        { vb: vb as unknown as number[], sCut: strokeThrough[r.endGroup] ?? sAcc, tCut: textThrough[r.endGroup] ?? tAcc },
+      );
+      await page.waitForTimeout(120);
+      out.push({ name: r.meaning, kind: r.kind, png: await el.screenshot({ type: "png" }) });
+    }
+  } finally {
+    await page.close();
+  }
+  return out;
 }
 
 // ---------- Resumable critic cache ----------

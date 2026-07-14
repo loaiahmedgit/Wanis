@@ -381,8 +381,6 @@ function computeLever(o: LeverObject, ox: number, oy: number): { groups: SubGrou
   const Y = (y: number) => y + oy;
   const idToX = new Map<string, number>();
   pts.forEach((p, i) => idToX.set(p.id, xs[i]));
-  const fulcrum = pts.find((p) => p.role === "fulcrum")!;
-  const fulcrumX = idToX.get(fulcrum.id)!;
 
   const barStroke = (lo: number, hi: number): StrokeItem => ({ d: `M ${X(lo)} ${Y(barY)} L ${X(hi)} ${Y(barY)}`, css: "vp-primary" });
   const drawnBar: [number, number][] = [];
@@ -520,6 +518,114 @@ function anchorOnBoxEdge(b: Box, towards: { x: number; y: number }): { x: number
   return { x: c.x, y: c.y + (dy > 0 ? b.h / 2 : -b.h / 2) };
 }
 
+const boxBounds = (b: Box): [number, number, number, number] => [b.x, b.y, b.w, b.h];
+function unionBoxBounds(bs: Box[]): [number, number, number, number] {
+  const x = Math.min(...bs.map((b) => b.x));
+  const y = Math.min(...bs.map((b) => b.y));
+  const r = Math.max(...bs.map((b) => b.x + b.w));
+  const bt = Math.max(...bs.map((b) => b.y + b.h));
+  return [x, y, r - x, bt - y];
+}
+
+/**
+ * Focus regions for a CONTAINER (boundary/context first, then nested member
+ * chunks in semantic order, then overview) or a wide ROW (frame each adjacent
+ * source+destination pair together with their connecting arrow). Returns the
+ * possibly-reordered groups + the regions, or null when the scene isn't one of
+ * these (compact scenes and cycles read whole). Every group runs exactly once.
+ */
+function deriveContainerRowFocus(
+  graph: SceneGraph,
+  groups: StrokeGroup[],
+  boxes: Map<string, Box>,
+  groupIndexOf: Map<string, number>,
+): { groups: StrokeGroup[]; focusRegions: FocusRegion[] } | null {
+  const containers = graph.objects.filter((o) => o.type === "container");
+  if (containers.length) {
+    const memberSet = new Set<string>();
+    containers.forEach((c) => (c as ContainerObject).members.forEach((m) => memberSet.add(m)));
+    const containerIds = new Set(containers.map((c) => c.id));
+    const tops = containers.filter((c) => !memberSet.has(c.id));
+    if (tops.length !== 1) return null; // v1: a single top-level container
+    const top = tops[0] as ContainerObject;
+    const topBox = boxes.get(top.id);
+    if (!topBox) return null;
+    const containerIdxs = containers.map((c) => groupIndexOf.get(c.id)).filter((i): i is number => i !== undefined);
+    if (!containerIdxs.length) return null;
+    const boundaryEnd = Math.max(...containerIdxs);
+
+    const regions: FocusRegion[] = [];
+    // Boundary/context — all container outlines, framing the whole enclosure.
+    regions.push({ meaning: top.label ?? "enclosure", members: containers.map((c) => c.id), startGroup: 0, endGroup: boundaryEnd, kind: "teach", bounds: boxBounds(topBox) });
+    // Nested member chunks in semantic (group) order.
+    const leaves = graph.objects
+      .filter((o) => memberSet.has(o.id) && !containerIds.has(o.id) && groupIndexOf.has(o.id) && boxes.has(o.id))
+      .map((o) => ({ id: o.id, gi: groupIndexOf.get(o.id)!, box: boxes.get(o.id)! }))
+      .sort((a, b) => a.gi - b.gi);
+    const CHUNK = 2;
+    let lastEnd = boundaryEnd;
+    for (let i = 0; i < leaves.length; i += CHUNK) {
+      const chunk = leaves.slice(i, i + CHUNK);
+      const gis = chunk.map((c) => c.gi);
+      regions.push({ meaning: "parts", members: chunk.map((c) => c.id), startGroup: Math.min(...gis), endGroup: Math.max(...gis), kind: "teach", bounds: unionBoxBounds(chunk.map((c) => c.box)) });
+      lastEnd = Math.max(...gis);
+    }
+    // Overview: whatever remains (stray labels) + the whole enclosure.
+    regions.push({ meaning: "overview", members: containers.map((c) => c.id), startGroup: lastEnd + 1, endGroup: groups.length - 1, kind: "overview", bounds: boxBounds(topBox) });
+    return { groups, focusRegions: regions };
+  }
+
+  // ROW: >=3 boxes in a horizontal chain connected by arrows.
+  const boxObjs = graph.objects.filter((o) => o.type === "box");
+  const arrows = graph.objects.filter((o) => o.type === "arrowBetween") as { id: string; from: string; to: string; label?: string }[];
+  if (boxObjs.length < 3 || arrows.length < boxObjs.length - 1) return null;
+  const ordered = boxObjs
+    .map((o) => ({ id: o.id, box: boxes.get(o.id) }))
+    .filter((x): x is { id: string; box: Box } => !!x.box)
+    .sort((a, b) => a.box.x - b.box.x);
+  const ys = ordered.map((x) => x.box.y + x.box.h / 2);
+  if (Math.max(...ys) - Math.min(...ys) > 40) return null; // not a clean horizontal row
+  const pairArrow = (a: string, b: string) => arrows.find((ar) => (ar.from === a && ar.to === b) || (ar.from === b && ar.to === a));
+  const chain: { id: string }[] = [];
+  for (let i = 0; i < ordered.length - 1; i++) {
+    const ar = pairArrow(ordered[i].id, ordered[i + 1].id);
+    if (!ar) return null;
+    chain.push(ar);
+  }
+
+  // Interleave groups: box0, arrow01, box1, arrow12, box2, ... then leftovers.
+  const newGroups: StrokeGroup[] = [];
+  const newIndex = new Map<string, number>();
+  const push = (id: string) => {
+    const gi = groupIndexOf.get(id);
+    if (gi === undefined || newIndex.has(id)) return;
+    newIndex.set(id, newGroups.length);
+    newGroups.push(groups[gi]);
+  };
+  push(ordered[0].id);
+  for (let i = 0; i < chain.length; i++) {
+    push(chain[i].id);
+    push(ordered[i + 1].id);
+  }
+  for (const o of graph.objects) if (!newIndex.has(o.id) && groupIndexOf.has(o.id)) push(o.id);
+
+  const regions: FocusRegion[] = [];
+  for (let i = 0; i < ordered.length - 1; i++) {
+    const startId = i === 0 ? ordered[0].id : chain[i].id;
+    regions.push({
+      meaning: `${ordered[i].id} -> ${ordered[i + 1].id}`,
+      members: [ordered[i].id, chain[i].id, ordered[i + 1].id],
+      startGroup: newIndex.get(startId)!,
+      endGroup: newIndex.get(ordered[i + 1].id)!,
+      kind: "teach",
+      bounds: unionBoxBounds([ordered[i].box, ordered[i + 1].box]),
+    });
+  }
+  const lastWindowEnd = newIndex.get(ordered[ordered.length - 1].id)!;
+  regions.push({ meaning: "overview", members: ordered.map((x) => x.id), startGroup: lastWindowEnd + 1, endGroup: newGroups.length - 1, kind: "overview", bounds: unionBoxBounds(ordered.map((x) => x.box)) });
+  return { groups: newGroups, focusRegions: regions };
+}
+
 /** Where "the point" of an object lives, for projections/arrows to target. */
 function anchor(o: SceneObject, boxes: Map<string, Box>, objects: SceneObject[]): { x: number; y: number } | null {
   const box = boxes.get(o.id);
@@ -541,6 +647,7 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
   if (!boxes.size) return null;
   const groups: StrokeGroup[] = [];
   const focusRegions: FocusRegion[] = [];
+  const groupIndexOf = new Map<string, number>();
 
   // Draw order (the StrokePlayer inks groups in sequence): container boundaries
   // first (outermost, then nested), so each enclosure is drawn before the parts
@@ -843,11 +950,29 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
     if (strokes.length || texts.length) {
       const meaning =
         o.type === "label" ? `label: ${o.text}` : o.type === "freeSketch" ? o.meaning : `${o.type} ${o.id}`;
+      groupIndexOf.set(o.id, groups.length);
       groups.push({ meaning, strokes, texts });
     }
   }
 
   if (!groups.length) return null;
+
+  // If no construct emitted its own focus regions (only the lever does), try to
+  // derive them for a container or a wide row so the semantic camera can teach
+  // the scene region-by-region on a small viewport.
+  if (!focusRegions.length) {
+    const derived = deriveContainerRowFocus(graph, groups, boxes, groupIndexOf);
+    if (derived) {
+      // The row path returns a reordered NEW array; the container path returns
+      // the same array unchanged — only swap contents when it actually differs.
+      if (derived.groups !== groups) {
+        const reordered = derived.groups.slice();
+        groups.length = 0;
+        groups.push(...reordered);
+      }
+      focusRegions.push(...derived.focusRegions);
+    }
+  }
 
   // De-collide labels: the LLM commonly puts two labels near the same point
   // (an object's own label + a separate label targeting it, or an arrow
@@ -906,6 +1031,28 @@ export function compileSceneGraph(graph: SceneGraph): StrokeProgram | null {
     }
   }
   if (!Number.isFinite(minX) || maxX <= minX || maxY <= minY) return null;
+
+  // Expand each focus region to include the ACTUAL text extents drawn in its
+  // groups (using final, de-collided positions) so a teaching frame never clips
+  // a label at its edge.
+  for (const r of focusRegions) {
+    let rx0 = r.bounds[0];
+    let ry0 = r.bounds[1];
+    let rx1 = r.bounds[0] + r.bounds[2];
+    let ry1 = r.bounds[1] + r.bounds[3];
+    for (let gi = r.startGroup; gi <= r.endGroup; gi++) {
+      const g = groups[gi];
+      if (!g) continue;
+      for (const t of g.texts) {
+        const tb = textBounds(t);
+        rx0 = Math.min(rx0, tb.l);
+        ry0 = Math.min(ry0, tb.t);
+        rx1 = Math.max(rx1, tb.r);
+        ry1 = Math.max(ry1, tb.b);
+      }
+    }
+    r.bounds = [rx0, ry0, rx1 - rx0, ry1 - ry0];
+  }
 
   return {
     viewBox: [minX - MARGIN, minY - MARGIN, maxX - minX + MARGIN * 2, maxY - minY + MARGIN * 2],

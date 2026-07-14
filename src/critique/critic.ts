@@ -86,6 +86,52 @@ export function isVisualApproved(v: VisualCritique): boolean {
   return !v.clipping && !v.collisions && v.legibility >= 4 && v.composition >= 3 && v.responsiveFit;
 }
 
+// ---------- Semantic-camera frames ----------
+
+/**
+ * Instruction for a FINAL OVERVIEW frame of a semantic-camera scene. The
+ * overview is deliberately contextual — it shows the whole structure zoomed out,
+ * so small-text legibility is NOT expected there. Still judge clipping, GENUINE
+ * shape/label collisions, and composition. (Teaching frames use the normal
+ * strict visualCritiqueInstruction and must be fully readable.)
+ */
+export function overviewCritiqueInstruction(): string {
+  return `You are reviewing the FINAL OVERVIEW frame of a diagram — the zoomed-out view a tutor ends on to show
+the whole structure at once. This frame is CONTEXTUAL: the labels are expected to be small and you must NOT
+penalize small-text legibility here. Judge only:
+- clipping: is anything cut off by the frame edges?
+- collisions: do shapes or labels genuinely OVERLAP / sit on top of each other (not merely small)?
+- legibility: set this to 5 (do not judge text size in the overview).
+- composition: 1-5 — is the whole-scene layout balanced and uncluttered?
+- responsiveFit: set true unless something is actually clipped.
+- summary + revisions as usual (only for real clipping/overlap/composition problems).`;
+}
+
+/** An overview passes on structure only: not clipped and compositionally clean. */
+export function isOverviewClean(v: VisualCritique): boolean {
+  return !v.clipping && !v.collisions && v.composition >= 3;
+}
+
+export interface FocusFrameCritique {
+  /** "teach" frames must be fully readable; "overview" is contextual. */
+  kind: "teach" | "overview";
+  name: string;
+  critique: VisualCritique;
+}
+
+/**
+ * Focus-camera approval: EVERY teaching frame must pass the full visual bar
+ * (a good overview can never compensate for an unreadable teaching frame), and
+ * the overview must be structurally clean (unclipped, no genuine overlaps,
+ * composed). Overview frames are judged only on structure, never small text.
+ */
+export function isFocusApproved(frames: FocusFrameCritique[]): boolean {
+  const teach = frames.filter((f) => f.kind === "teach");
+  const over = frames.filter((f) => f.kind === "overview");
+  if (!teach.length) return false;
+  return teach.every((f) => isVisualApproved(f.critique)) && over.every((f) => isOverviewClean(f.critique));
+}
+
 // ---------- Semantic critic ----------
 
 export interface SemanticCritique {
